@@ -1,10 +1,12 @@
 package auth
 
 import (
+	"encoding/json"
 	"fmt"
 	httpclient "jpy-cli/pkg/client/http"
 	"jpy-cli/pkg/config"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +19,7 @@ import (
 var (
 	detailsGroup string
 	concurrency  int
-	plainOutput  bool
+	output       string
 	sem          chan struct{}
 )
 
@@ -25,11 +27,18 @@ func NewListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "列出服务器",
-		Run: func(cmd *cobra.Command, args []string) {
+		Long: `列出所有分组及服务器信息。
+
+输出模式:
+  --output tui     交互式 TUI 界面（默认）
+  --output plain   纯文本输出，适合 SSH / grep / awk
+  --output json    JSON 格式输出，适合程序解析
+
+使用 --details <分组名> 可查看指定分组中每台服务器的登录状态。`,
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
-				fmt.Printf("无法加载配置: %v\n", err)
-				return
+				return fmt.Errorf("无法加载配置: %v", err)
 			}
 
 			// Initialize semaphore
@@ -41,21 +50,94 @@ func NewListCmd() *cobra.Command {
 			}
 			sem = make(chan struct{}, concurrency)
 
+			// --details 模式：检查指定分组的服务器状态
 			if detailsGroup != "" {
-				showGroupDetails(cfg, detailsGroup, concurrency)
-			} else if plainOutput {
+				switch output {
+				case "json":
+					return showGroupDetailsJSON(cfg, detailsGroup, concurrency)
+				case "plain":
+					return showGroupDetailsPlain(cfg, detailsGroup, concurrency)
+				default:
+					showGroupDetails(cfg, detailsGroup, concurrency)
+					return nil
+				}
+			}
+
+			// 常规列表模式
+			switch output {
+			case "json":
+				return showJSONList(cfg)
+			case "plain":
 				showPlainList(cfg)
-			} else {
+				return nil
+			default:
 				runTUI(cfg)
+				return nil
 			}
 		},
 	}
 
 	cmd.Flags().StringVarP(&detailsGroup, "details", "d", "", "显示特定分组的详情")
 	cmd.Flags().IntVarP(&concurrency, "concurrency", "c", 5, "服务器检查的并发限制")
-	cmd.Flags().BoolVar(&plainOutput, "plain", false, "纯文本输出（适用于非交互式环境）")
+	cmd.Flags().StringVarP(&output, "output", "o", "tui", "输出模式 (tui/plain/json)")
 
 	return cmd
+}
+
+// --- JSON Output ---
+
+type authListJSON struct {
+	ActiveGroup string              `json:"active_group"`
+	Groups      []authGroupJSON     `json:"groups"`
+}
+
+type authGroupJSON struct {
+	Name    string               `json:"name"`
+	Active  bool                 `json:"active"`
+	Count   int                  `json:"count"`
+	Servers []authServerItemJSON `json:"servers,omitempty"`
+}
+
+type authServerItemJSON struct {
+	URL      string `json:"url"`
+	Username string `json:"username"`
+	Disabled bool   `json:"disabled"`
+	Error    string `json:"error,omitempty"`
+}
+
+func cleanAuthURL(url string) string {
+	url = strings.TrimPrefix(url, "https://")
+	url = strings.TrimPrefix(url, "http://")
+	return url
+}
+
+func showJSONList(cfg *config.Config) error {
+	activeGroup := cfg.ActiveGroup
+	if activeGroup == "" {
+		activeGroup = "default"
+	}
+	out := authListJSON{
+		ActiveGroup: activeGroup,
+	}
+	for g, servers := range cfg.Groups {
+		gj := authGroupJSON{
+			Name:   g,
+			Active: g == activeGroup,
+			Count:  len(servers),
+		}
+		for _, s := range servers {
+			gj.Servers = append(gj.Servers, authServerItemJSON{
+				URL:      cleanAuthURL(s.URL),
+				Username: s.Username,
+				Disabled: s.Disabled,
+				Error:    s.LastLoginError,
+			})
+		}
+		out.Groups = append(out.Groups, gj)
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(data))
+	return nil
 }
 
 // --- Plain Text Mode (非交互式输出) ---
@@ -66,36 +148,138 @@ func showPlainList(cfg *config.Config) {
 		activeGroup = "default"
 	}
 
-	fmt.Printf("分组列表:\n")
+	fmt.Println("GROUP\tACTIVE\tCOUNT")
 	for g, servers := range cfg.Groups {
-		active := ""
+		active := "false"
 		if g == activeGroup {
-			active = " (当前)"
+			active = "true"
 		}
-		fmt.Printf("  %s%s - %d 台服务器\n", g, active, len(servers))
+		fmt.Printf("%s\t%s\t%d\n", g, active, len(servers))
 	}
 
-	fmt.Printf("\n当前分组 [%s] 服务器:\n", activeGroup)
+	fmt.Println("---")
+	fmt.Println("URL\tUSERNAME\tDISABLED\tERROR")
 	servers := config.GetGroupServers(cfg, activeGroup)
-	if len(servers) == 0 {
-		fmt.Println("  (空)")
-		return
-	}
-
-	fmt.Printf("  %-4s %-30s %-15s %-10s\n", "序号", "URL", "用户名", "状态")
-	fmt.Printf("  %-4s %-30s %-15s %-10s\n", "----", "------------------------------", "---------------", "----------")
-	for i, s := range servers {
-		status := "正常"
+	for _, s := range servers {
+		disabled := "false"
 		if s.Disabled {
-			status = "已移除"
-		} else if s.LastLoginError != "" {
-			status = "异常"
+			disabled = "true"
 		}
-		fmt.Printf("  %-4d %-30s %-15s %-10s\n", i+1, s.URL, s.Username, status)
+		fmt.Printf("%s\t%s\t%s\t%s\n", cleanAuthURL(s.URL), s.Username, disabled, s.LastLoginError)
 	}
+	fmt.Fprintf(os.Stderr, "当前分组: %s, 总计: %d\n", activeGroup, len(servers))
 }
 
-// --- Non-Interactive Mode ---
+// --- Group Details (with health check) ---
+
+type groupDetailsJSON struct {
+	Group   string                    `json:"group"`
+	Total   int                       `json:"total"`
+	Online  int                       `json:"online"`
+	Failed  int                       `json:"failed"`
+	Servers []groupDetailsServerJSON  `json:"servers"`
+}
+
+type groupDetailsServerJSON struct {
+	URL      string `json:"url"`
+	Username string `json:"username"`
+	Status   string `json:"status"`
+	Error    string `json:"error,omitempty"`
+}
+
+func collectGroupDetails(cfg *config.Config, groupName string, concurrency int) []config.LocalServerConfig {
+	servers := config.GetGroupServers(cfg, groupName)
+	results := make(chan config.LocalServerConfig, len(servers))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	for _, server := range servers {
+		wg.Add(1)
+		go func(s config.LocalServerConfig) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			results <- checkServerStatus(s)
+		}(server)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var collected []config.LocalServerConfig
+	for s := range results {
+		collected = append(collected, s)
+	}
+	return collected
+}
+
+func showGroupDetailsJSON(cfg *config.Config, groupName string, concurrency int) error {
+	servers := config.GetGroupServers(cfg, groupName)
+	if len(servers) == 0 {
+		out := groupDetailsJSON{Group: groupName}
+		data, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "正在检查 %d 台服务器...\n", len(servers))
+	collected := collectGroupDetails(cfg, groupName, concurrency)
+
+	out := groupDetailsJSON{
+		Group:   groupName,
+		Total:   len(collected),
+		Servers: make([]groupDetailsServerJSON, len(collected)),
+	}
+	for i, s := range collected {
+		status := "online"
+		errStr := ""
+		if s.LastLoginError != "" {
+			status = "failed"
+			errStr = s.LastLoginError
+			out.Failed++
+		} else {
+			out.Online++
+		}
+		out.Servers[i] = groupDetailsServerJSON{
+			URL:      cleanAuthURL(s.URL),
+			Username: s.Username,
+			Status:   status,
+			Error:    errStr,
+		}
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(data))
+	return nil
+}
+
+func showGroupDetailsPlain(cfg *config.Config, groupName string, concurrency int) error {
+	servers := config.GetGroupServers(cfg, groupName)
+	if len(servers) == 0 {
+		fmt.Fprintf(os.Stderr, "分组 '%s' 无服务器\n", groupName)
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "正在检查 %d 台服务器...\n", len(servers))
+	collected := collectGroupDetails(cfg, groupName, concurrency)
+
+	fmt.Println("URL\tUSERNAME\tSTATUS\tERROR")
+	online := 0
+	for _, s := range collected {
+		status := "online"
+		if s.LastLoginError != "" {
+			status = "failed"
+		} else {
+			online++
+		}
+		fmt.Printf("%s\t%s\t%s\t%s\n", cleanAuthURL(s.URL), s.Username, status, s.LastLoginError)
+	}
+	fmt.Fprintf(os.Stderr, "分组: %s, 总计: %d, 在线: %d, 失败: %d\n", groupName, len(collected), online, len(collected)-online)
+	return nil
+}
+
+// --- Non-Interactive Mode (TUI default) ---
 
 func showGroupDetails(cfg *config.Config, groupName string, concurrency int) {
 	servers := config.GetGroupServers(cfg, groupName)
@@ -130,8 +314,6 @@ func showGroupDetails(cfg *config.Config, groupName string, concurrency int) {
 	}()
 
 	// Collect results and update config
-	// We need to keep other groups' servers too
-	// Map existing servers by URL for easy replacement
 	serverMap := make(map[string]config.LocalServerConfig)
 	for _, s := range cfg.Servers {
 		serverMap[s.URL] = s
@@ -172,18 +354,13 @@ func truncate(s string, max int) string {
 
 func checkServerStatus(server config.LocalServerConfig) config.LocalServerConfig {
 	client := httpclient.NewClient(server.URL, server.Token)
-	// Try to login if no token or just to verify
-	// User wants "login status". The best way is to try login.
-	// If we already have a token, we could try to use it (e.g. GetLicense), but login is safer to refresh.
-	// Let's just try login.
-
 	_, err := client.Login(server.Username, server.Password)
 	server.LastLoginTime = time.Now().Format(time.RFC3339)
 	if err != nil {
 		server.LastLoginError = err.Error()
 	} else {
 		server.LastLoginError = ""
-		server.Token = client.Token // Update token
+		server.Token = client.Token
 	}
 	return server
 }
@@ -304,9 +481,6 @@ func (m modelTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, checkServerCmd(s))
 				}
 				return m, tea.Batch(cmds...)
-			} else {
-				// Detail view for server? Or just toggle?
-				// For now, nothing special on Enter in server list
 			}
 		case "esc":
 			if m.state == viewServers {
@@ -330,10 +504,7 @@ func (m modelTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.cfg.Groups[m.selectedGroup] = servers
 		}
-		// Save config? Maybe not in TUI to avoid lag, or save on exit?
-		// User asked to record it.
 		config.Save(m.cfg)
-		// but here we process one msg at a time in Update loop, so it's safe.
 		return m, nil
 
 	case spinner.TickMsg:

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"jpy-cli/pkg/config"
 	"jpy-cli/pkg/middleware/connector"
@@ -18,13 +19,21 @@ func NewRemoveCmd() *cobra.Command {
 	var hasError bool
 	var force bool
 	var search string
+	var outputMode string
 
 	cmd := &cobra.Command{
 		Use:   "remove",
 		Short: "移除/软删除中间件服务器",
 		Long: `从当前分组中移除中间件服务器。
 支持软删除（默认，可恢复）和强制删除（--force）。
-可以根据错误状态、名称匹配或批量操作。`,
+可以根据错误状态、名称匹配或批量操作。
+
+输出模式:
+  --output tui     默认交互式
+  --output plain   纯文本结果
+  --output json    JSON 格式结果
+
+非交互模式（plain/json）必须指定 --all / --has-error / --search 之一。`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
@@ -37,35 +46,44 @@ func NewRemoveCmd() *cobra.Command {
 			}
 			servers := cfg.Groups[activeGroup]
 			if len(servers) == 0 {
+				if outputMode == "json" {
+					fmt.Println(`{"removed":0,"message":"当前分组没有服务器"}`)
+					return nil
+				}
 				fmt.Println("当前分组没有服务器。")
 				return nil
 			}
 
 			var targets []*config.LocalServerConfig
-			var indices []int
+
+			// 非交互模式必须有明确目标
+			if (outputMode == "json" || outputMode == "plain") && !removeAll && !hasError && search == "" {
+				return fmt.Errorf("非交互模式（-o json/plain）必须指定 --all / --has-error / --search 之一")
+			}
 
 			// 1. Identify Targets
 			if removeAll {
 				for i := range servers {
 					targets = append(targets, &servers[i])
-					indices = append(indices, i)
 				}
 			} else if hasError {
-				fmt.Println("正在检测连接状态 (只删除连接失败的)...")
+				if outputMode == "plain" || outputMode == "json" {
+					fmt.Fprintf(os.Stderr, "正在检测连接状态...\n")
+				} else {
+					fmt.Println("正在检测连接状态 (只删除连接失败的)...")
+				}
 				failedIndices := checkConnectionFailures(servers, cfg)
 				for _, idx := range failedIndices {
 					targets = append(targets, &servers[idx])
-					indices = append(indices, idx)
 				}
 			} else if search != "" {
 				for i, s := range servers {
 					if selector.MatchServerPattern(s.URL, search) || selector.MatchServerPattern(s.Username, search) {
 						targets = append(targets, &servers[i])
-						indices = append(indices, i)
 					}
 				}
 			} else {
-				// Interactive mode
+				// Interactive mode (only for tui)
 				fmt.Println("进入交互模式...")
 				fmt.Printf("当前分组 (%s) 服务器列表:\n", activeGroup)
 				for i, s := range servers {
@@ -92,14 +110,12 @@ func NewRemoveCmd() *cobra.Command {
 				} else if input == "a" {
 					for i := range servers {
 						targets = append(targets, &servers[i])
-						indices = append(indices, i)
 					}
 				} else if input == "e" {
 					fmt.Println("正在检测连接状态...")
 					failedIndices := checkConnectionFailures(servers, cfg)
 					for _, idx := range failedIndices {
 						targets = append(targets, &servers[idx])
-						indices = append(indices, idx)
 					}
 				} else {
 					parts := strings.Split(input, ",")
@@ -108,7 +124,6 @@ func NewRemoveCmd() *cobra.Command {
 						if _, err := fmt.Sscanf(p, "%d", &idx); err == nil {
 							if idx > 0 && idx <= len(servers) {
 								targets = append(targets, &servers[idx-1])
-								indices = append(indices, idx-1)
 							}
 						}
 					}
@@ -116,60 +131,52 @@ func NewRemoveCmd() *cobra.Command {
 			}
 
 			if len(targets) == 0 {
+				if outputMode == "json" {
+					fmt.Println(`{"removed":0,"message":"未找到匹配的服务器"}`)
+					return nil
+				}
 				fmt.Println("未找到匹配的服务器。")
 				return nil
 			}
 
-			// 2. Confirm (--all + --force 组合时跳过交互确认，适配自动化场景)
-			fmt.Printf("即将%s %d 台服务器:\n", func() string {
+			// 2. Confirm (非交互模式或 --force 时跳过确认)
+			skipConfirm := (outputMode == "json" || outputMode == "plain") ||
+				((removeAll || hasError || search != "") && force)
+
+			if !skipConfirm {
+				opName := "暂时移除(软删除)"
 				if force {
-					return "永久删除"
+					opName = "永久删除"
 				}
-				return "暂时移除(软删除)"
-			}(), len(targets))
-
-			for i, t := range targets {
-				if i >= 10 {
-					fmt.Printf("... 等共 %d 台\n", len(targets))
-					break
+				fmt.Printf("即将%s %d 台服务器:\n", opName, len(targets))
+				for i, t := range targets {
+					if i >= 10 {
+						fmt.Printf("... 等共 %d 台\n", len(targets))
+						break
+					}
+					fmt.Printf(" - %s\n", t.URL)
 				}
-				fmt.Printf(" - %s\n", t.URL)
-			}
-
-			skipConfirm := (removeAll || hasError || search != "") && force
-			if !skipConfirm && !confirmAction() {
-				return nil
+				if !confirmAction() {
+					return nil
+				}
 			}
 
 			// 3. Execute
+			removedURLs := make([]string, 0, len(targets))
 			if force {
-				// Remove from slice (backwards to avoid index shift issues if we were deleting by index,
-				// but here we need to rebuild the slice or map carefully)
-				// Easiest way: filter keep list
 				var keep []config.LocalServerConfig
 				targetMap := make(map[string]bool)
 				for _, t := range targets {
 					targetMap[t.URL] = true
+					removedURLs = append(removedURLs, cleanServerURL(t.URL))
 				}
-
 				for _, s := range servers {
 					if !targetMap[s.URL] {
 						keep = append(keep, s)
 					}
 				}
 				cfg.Groups[activeGroup] = keep
-				fmt.Printf("已永久删除 %d 台服务器。\n", len(targets))
 			} else {
-				// Soft delete: Update Disabled flag
-				// We need to update the actual items in the slice.
-				// Pointers in 'targets' point to elements in 'servers' slice?
-				// CAUTION: 'servers' is a copy of slice header? No, 'servers := cfg.Groups[activeGroup]' copies slice header.
-				// Elements share underlying array.
-				// But appending to 'servers' might reallocate. Here we just modify.
-				// But we range over 'servers' (value copy) earlier?
-				// No: 'for i := range servers { targets = append(targets, &servers[i]) }'
-				// This works if 'servers' is not reallocated.
-				// Let's rely on URL matching to be safe.
 				count := 0
 				for i := range cfg.Groups[activeGroup] {
 					s := &cfg.Groups[activeGroup][i]
@@ -177,14 +184,45 @@ func NewRemoveCmd() *cobra.Command {
 						if s.URL == t.URL {
 							s.Disabled = true
 							count++
+							removedURLs = append(removedURLs, cleanServerURL(s.URL))
 							break
 						}
 					}
 				}
-				fmt.Printf("已暂时移除 %d 台服务器。\n", count)
+				_ = count
 			}
 
-			return config.Save(cfg)
+			if err := config.Save(cfg); err != nil {
+				return err
+			}
+
+			// 4. Output
+			switch outputMode {
+			case "json":
+				result := map[string]interface{}{
+					"group":   activeGroup,
+					"removed": len(removedURLs),
+					"force":   force,
+					"urls":    removedURLs,
+				}
+				data, _ := json.MarshalIndent(result, "", "  ")
+				fmt.Println(string(data))
+			case "plain":
+				action := "soft_delete"
+				if force {
+					action = "force_delete"
+				}
+				fmt.Printf("ACTION\tGROUP\tCOUNT\n")
+				fmt.Printf("%s\t%s\t%d\n", action, activeGroup, len(removedURLs))
+			default:
+				if force {
+					fmt.Printf("已永久删除 %d 台服务器。\n", len(removedURLs))
+				} else {
+					fmt.Printf("已暂时移除 %d 台服务器。\n", len(removedURLs))
+				}
+			}
+
+			return nil
 		},
 	}
 
@@ -192,6 +230,7 @@ func NewRemoveCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&hasError, "has-error", false, "只删除连接失败的服务器")
 	cmd.Flags().BoolVar(&force, "force", false, "永久删除 (不提供则为软删除)")
 	cmd.Flags().StringVar(&search, "search", "", "模糊匹配删除")
+	cmd.Flags().StringVarP(&outputMode, "output", "o", "tui", "输出模式 (tui/plain/json)")
 
 	return cmd
 }
@@ -204,7 +243,7 @@ func checkConnectionFailures(servers []config.LocalServerConfig, cfg *config.Con
 
 	for i, s := range servers {
 		if s.Disabled {
-			continue // Already disabled
+			continue
 		}
 		wg.Add(1)
 		go func(idx int, server config.LocalServerConfig) {
@@ -213,15 +252,11 @@ func checkConnectionFailures(servers []config.LocalServerConfig, cfg *config.Con
 			defer func() { <-sem }()
 
 			conn := connector.NewConnectorService(cfg)
-			// Short timeout for check
-			// We might need to enforce a shorter timeout here specifically?
-			// The global timeout applies.
 			ws, err := conn.Connect(server)
 			if err != nil {
 				mu.Lock()
 				failedIndices = append(failedIndices, idx)
 				mu.Unlock()
-				fmt.Printf("检测失败: %s (%v)\n", server.URL, err)
 			} else {
 				ws.Close()
 			}
