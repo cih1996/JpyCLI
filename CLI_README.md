@@ -1,416 +1,379 @@
-# JPY CLI Command Reference & AI Instruction Manual
+# JPY CLI Command Reference
 
-This document provides a comprehensive, linear reference for the JPY CLI tool. It is structured to be easily parsed by AI agents to generate correct command sequences, while remaining readable for human operators.
+A CLI tool for JPY middleware server management and device control, supporting both local LAN middleware and remote Cloud Platform APIs.
 
-## 1. System Overview
+## Command Tree
 
-**Tool Name**: `jpy-cli` (Development alias: `go run main.go`)
-**Purpose**: Management of JPY middleware servers, device control (ADB/USB/Power), and authorization administration.
-**Interaction Philosophy**:
-- **Default**: Interactive TUI (Text User Interface) for human convenience.
-- **Automation/AI**: **Strictly Non-Interactive**. Use specific flags (`--all`, `--force`, `-s`, `--seat`) to bypass prompts.
-
-## 2. Command Protocol
-
-### 2.1 Global Syntax
-```bash
-jpy-cli [scope] [resource] [action] [flags]
+```
+jpy
+├── middleware                # Middleware management (LAN)
+│   ├── list                  # List servers in current group
+│   ├── auth                  # Authentication & server management
+│   │   ├── login             # Login to server
+│   │   ├── create            # Batch generate server configs
+│   │   ├── list              # List configured servers
+│   │   ├── select            # Select/switch active group
+│   │   ├── import            # Import configs from JSON file
+│   │   ├── export            # Export current group config
+│   │   └── template          # Generate config template
+│   ├── device                # Device management
+│   │   ├── list              # List device details
+│   │   ├── status            # Server status & device statistics
+│   │   ├── export            # Export device info to file
+│   │   ├── reboot            # Reboot devices (power cycle)
+│   │   ├── usb               # Switch USB mode
+│   │   ├── adb               # Control ADB state
+│   │   └── log               # View single device log
+│   ├── admin                 # Admin commands
+│   │   ├── auto-auth         # Auto-scan and authorize servers
+│   │   └── update-cluster    # Batch update control platform address
+│   ├── remove                # Remove/soft-delete servers
+│   ├── relogin               # Reconnect soft-deleted servers
+│   ├── restart               # Restart boxCore service
+│   └── ssh                   # SSH to middleware (auto-password)
+├── cloud                     # Cloud Platform Remote API
+│   ├── config                # View/modify cloud config
+│   │   └── init-configs      # Create sample config files
+│   └── stress                # Device modification stress test
+├── admin                     # System admin commands
+│   └── middleware
+│       ├── generate          # Generate license codes
+│       ├── list              # List license codes
+│       └── get-root-password # Get root password
+├── config                    # Local config management
+│   ├── list                  # List all configs
+│   ├── get                   # Get config value
+│   └── set                   # Set config value
+├── server                    # Backend services
+│   ├── ssh                   # Start SSH jump server
+│   └── web                   # Start web server
+├── proxy                     # Transparent proxy
+├── tools                     # Utilities
+│   ├── middleware create     # Batch generate middleware configs
+│   └── completion-install    # Install shell completion
+└── log                       # View CLI operation logs
 ```
 
-### 2.2 Global Flags
+---
+
+## Global Flags
+
 | Flag | Type | Description |
-| :--- | :--- | :--- |
-| `--debug` | boolean | Enable debug logging and verbose output. |
-| `--log-level` | string | Set log level: `debug`, `info`, `warn`, `error`. |
-| `--config` | string | Specify custom config file path. |
-
-### 2.3 Common Filter Flags (Device Scope)
-Used for `device list`, `device status`, and `device control` commands.
-| Flag | Alias | Description | Example |
-| :--- | :--- | :--- | :--- |
-| `--server` | `-s` | Server IP/URL keyword (fuzzy match). | `-s "192.168.1"` |
-| `--group` | `-g` | Server group name. | `-g "default"` |
-| `--seat` | | Specific seat number (integer). | `--seat 5` |
-| `--uuid` | `-u` | Device UUID (fuzzy match). | `-u "f73a9c"` |
-| `--authorized`| | Filter by authorized servers only. | `--authorized` |
-| `--filter-online`| | Filter by device online status. | `--filter-online true` |
-| `--filter-adb` | | Filter by ADB enabled status. | `--filter-adb true` |
-| `--filter-usb` | | Filter by USB mode (true=Device/USB, false=Host/OTG). | `--filter-usb false` |
-| `--filter-uuid` | | Filter by UUID presence status (true/false). | `--filter-uuid true` |
-| `--filter-has-ip` | | Filter by IP presence status (true/false). | `--filter-has-ip false` |
-| `--uuid-count-gt` | | Filter servers with UUID count greater than specified value. | `--uuid-count-gt 10` |
-| `--uuid-count-lt` | | Filter servers with UUID count less than specified value. | `--uuid-count-lt 5` |
+|------|------|-------------|
+| `--debug` | bool | Enable debug logging (also outputs to console) |
+| `--log-level` | string | Log level: `debug`/`info`/`warn`/`error` |
 
 ---
 
-## 3. Command Library
+## Output Modes `--output` / `-o`
 
-### 3.1 Scope: Middleware Device (`middleware device`)
-Manage and control connected devices.
+Most commands support three output modes:
 
-#### `list`
-- **Intent**: Retrieve detailed list of devices matching criteria.
-- **Syntax**: `jpy-cli middleware device list [flags]`
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `tui` | Default interactive TUI | Human operation |
+| `plain` | Plain text, tab-separated | Script parsing, Win7 SSH |
+| `json` | Structured JSON | AI/programmatic parsing |
 
-#### `export`
-- **Intent**: Export device information to a file with customizable fields.
-- **Syntax**: `jpy-cli middleware device export [output-file] [flags]`
-- **Key Flags**:
-        - `--export-id`: Export device ID (generated from server address).
-    - `--export-ip`: Export device IP address.
-    - `--export-uuid`: Export device UUID.
-    - `--export-seat`: Export device seat number.
-    - `--export-auto`: Intelligent export mode: automatically complete missing IP addresses for devices with UUID but no IP, skip devices without UUID, and log statistics.
-- **Default Behavior**: If no flags specified, exports all fields in format: `ID\tUUID\tIP\tSeat`
-- **Use Cases**:
-  - **DHCP Configuration**: When some devices fail to read IP but have SN (UUID), use `--export-auto` mode to intelligently infer and complete missing IP addresses, generating a complete device list for DHCP server configuration
-  - **Batch Device Management**: Export device information for automated script processing
-  - **Device Inventory**: Create complete device inventory with all necessary connection information
+### Commands Supporting `--output`
 
-#### `status`
-- **Intent**: Get aggregated server status and device counts.
-- **Syntax**: `jpy-cli middleware device status [flags]`
-- **Key Flags**:
-    - `--detail`: Show detailed authorization info (SN, Control Platform, License Name).
-    - **Advanced Filters**:
-        - `--auth-failed`: Filter servers with authorization issues.
-        - `--fw-has`: Filter servers where firmware version contains string.
-        - `--fw-not`: Filter servers where firmware version does not contain string.
-        - `--speed-gt`: Filter servers with network speed > value (Mbps).
-        - `--speed-lt`: Filter servers with network speed < value (Mbps).
-        - `--cluster-contains`: Filter servers where control platform address contains string.
-        - `--cluster-not-contains`: Filter servers where control platform address does not contain string.
-        - `--sn-gt`: Filter servers with SN > value (string compare).
-        - `--sn-lt`: Filter servers with SN < value (string compare).
-        - `--ip-count-gt`: Filter servers with IP count > value.
-        - `--ip-count-lt`: Filter servers with IP count < value.
-        - `--biz-online-gt`: Filter servers with Business Online count > value.
-        - `--biz-online-lt`: Filter servers with Business Online count < value.
+| Command | tui | plain | json |
+|---------|-----|-------|------|
+| `middleware list` | ✅ | ✅ | ✅ |
+| `middleware remove` | ✅ | ✅ | ✅ |
+| `middleware relogin` | ✅ | ✅ | ✅ |
+| `middleware auth login` | ✅ | ✅ | ✅ |
+| `middleware auth create` | ✅ | ✅ | ✅ |
+| `middleware auth list` | ✅ | ✅ | ✅ |
+| `middleware auth select` | ✅ | ✅ | ✅ |
+| `middleware device list` | ✅ | ✅ | ✅ |
+| `middleware device status` | ✅ | ✅ | ✅ |
+| `middleware device export` | ✅ | ✅ | ✅ |
+| `middleware device reboot` | ✅ | ✅ | ✅ |
+| `middleware device usb` | ✅ | ✅ | ✅ |
+| `middleware device adb` | ✅ | ✅ | ✅ |
+| `cloud config` | - | ✅ | ✅ |
+| `cloud stress` | ✅ | ✅ | ✅ |
 
-#### `reboot`
-- **Intent**: Power cycle the device.
-- **Syntax**: `jpy-cli middleware device reboot [flags]`
-- **Critical Flags**:
-    - `--all`: Execute on all matching devices without confirmation.
-
-#### `usb`
-- **Intent**: Switch USB MUX mode.
-- **Syntax**: `jpy-cli middleware device usb [flags]`
-- **Critical Flags**:
-    - `-m, --mode`: Target mode (`host` for OTG, `device` for USB).
-    - `--all`: Execute without confirmation.
-
-#### `adb`
-- **Intent**: Enable or disable ADB debugging.
-- **Syntax**: `jpy-cli middleware device adb [flags]`
-- **Critical Flags**:
-    - `--set`: Target state (`on` or `off`).
-    - `--all`: Execute without confirmation.
-
-#### `log`
-- **Intent**: Real-time log monitoring for a **single** device.
-- **Syntax**: `jpy-cli middleware device log [flags]`
-- **Constraint**: Must target a single device via `-s` and `--seat`.
-- **Automation**: Automatically handles USB switch -> ADB enable -> Shell connection -> Tail log.
+> **Win7 Note**: Win7 SSH does not support TUI raw mode. Use `-o plain` or `-o json` to avoid crashes.
 
 ---
 
-### 3.2 Scope: Middleware Server (`middleware`)
-Manage middleware server instances.
+## Middleware Management (`middleware`)
 
-#### `remove`
-- **Intent**: Remove (soft delete) a server from the active list.
-- **Syntax**: `jpy-cli middleware remove [flags]`
-- **Critical Flags**:
-    - `--search`: Keyword to match server URL/Name.
-    - `--force`: Hard delete (permanent) instead of soft delete.
-    - `--has-error`: Target only servers with connection errors.
-    - `--all`: Target all matching servers (requires careful use).
+### `middleware list` — List Servers
 
-#### `relogin`
-- **Intent**: Attempt to reactivate/reconnect soft-deleted servers.
-- **Syntax**: `jpy-cli middleware relogin`
+```bash
+jpy middleware list [-o json|plain]
+```
 
-#### `auth login`
-- **Intent**: Authenticate and add a new middleware server.
-- **Syntax**: `jpy-cli middleware auth login [flags]`
+**JSON Output**:
+```json
+{
+  "group": "default",
+  "total": 3,
+  "servers": [
+    { "url": "192.168.1.201:443", "username": "admin", "status": "ok" }
+  ]
+}
+```
 
-#### `auth create`
-- **Intent**: Batch generate middleware server configurations and add them to the current group.
-- **Syntax**: `jpy-cli middleware auth create [flags]`
-- **Modes**:
-    - **Interactive**: Default mode if no flags provided.
-    - **Non-Interactive (Batch)**: Use flags to specify parameters.
-- **Key Flags**:
-    - `-i, --ip`: IP range(s), supports comma-separated list (e.g., `192.168.1.201-210,192.168.2.100`).
-    - `-P, --port`: Server port (default: 443).
-    - `-u, --username`: Admin username (default: admin).
-    - `-p, --password`: Admin password (default: admin).
+### `middleware auth login` — Login to Server
 
-#### `auth export`
-- **Intent**: Export current group configuration to `servers.json` (LocalServerConfig format).
-- **Syntax**: `jpy-cli middleware auth export [flags]`
-- **Key Flags**:
-    - `-o, --output`: Output file path (default: `servers.json`).
+```bash
+jpy middleware auth login <url> -u <username> -p <password> [-g <group>] [-o json]
+```
 
-#### `auth list`
-- **Intent**: List configured servers.
-- **Syntax**: `jpy-cli middleware auth list [flags]`
+### `middleware auth create` — Batch Generate Server Configs
 
-#### `auth import`
-- **Intent**: Batch import servers from JSON.
-- **Syntax**: `jpy-cli middleware auth import [file]`
+```bash
+jpy middleware auth create --ip <range> [-P <port>] [-u <user>] [-p <pass>] [-o json]
+```
 
-#### `ssh`
-- **Intent**: Connect to a middleware server via SSH (Automatically retrieves Root password).
-- **Syntax**: `jpy-cli middleware ssh [ip]`
-- **Prerequisites**: Requires Operation Login (automatically handled).
-- **Behavior**:
-    1. Connects to port 22 to retrieve the banner key.
-    2. Decrypts the root password using the Admin API.
-    3. Generates a connection command (supports `sshpass` if installed).
+> Non-interactive mode (`-o json/plain`) requires `--ip`.
 
-#### `restart`
-- **Intent**: Restart the boxCore service on selected devices.
-- **Syntax**: `jpy-cli middleware restart [flags]`
-- **Note**: Supports concurrent execution and common filters (Group, Server, UUID, Seat, etc.).
+### `middleware auth list` — List Configured Servers
 
----
+```bash
+jpy middleware auth list [--details] [-o json]
+```
 
-### 3.3 Scope: Admin (`admin`)
-System administration and license management.
+### `middleware auth select` — Select/Switch Group
 
-#### `middleware admin auto-auth`
-- **Intent**: Auto-scan and authorize pending middleware servers.
-- **Syntax**: `jpy-cli middleware admin auto-auth`
+```bash
+# List groups
+jpy middleware auth select -o json
 
-#### `middleware admin update-cluster`
-- **Intent**: Batch update the Control Platform address (MgtCenter) for middleware servers and sync with Admin Backend.
-- **Syntax**: `jpy-cli middleware admin update-cluster [new_address] [flags]`
-- **Key Flags**:
-    - `--server`: Filter server URL/Name (regex supported).
-    - `--group`: Target specific server group.
-    - `--authorized`: Filter by authorization status (true/false).
-    - `--force`: Force update even if the address already matches.
+# Switch group
+jpy middleware auth select <group_name> -o json
+```
 
-#### `admin device generate`
-- **Intent**: Generate new license codes.
-- **Syntax**: `jpy-cli admin device generate`
+### `middleware auth import/export/template`
 
-#### `admin device list`
-- **Intent**: List generated licenses.
-- **Syntax**: `jpy-cli admin device list`
+```bash
+jpy middleware auth import <file>
+jpy middleware auth export [-o <output_file>]
+jpy middleware auth template
+```
 
----
+### `middleware remove` — Remove Servers
 
-### 3.4 Scope: System (`config`, `log`)
+```bash
+jpy middleware remove [--search <keyword>] [--has-error] [--force] [--all] [-o json]
+```
 
-#### `config`
-- **Intent**: Read/Write local configuration.
-- **Syntax**:
-    - `jpy-cli config list`
-    - `jpy-cli config get <key>`
-    - `jpy-cli config set <key> <value>`
+> Non-interactive mode requires `--all`, `--has-error`, or `--search`.
 
-#### `log`
-- **Intent**: Tail the CLI's own operation log (`jpy.log`).
-- **Syntax**: `jpy-cli log [flags]`
-- **Flags**: `-f` (follow), `-n` (lines), `--grep` (filter).
+### `middleware relogin` — Reconnect Soft-Deleted Servers
+
+```bash
+jpy middleware relogin [-o json]
+```
+
+**JSON Output**:
+```json
+{
+  "total": 5, "restored": 3, "failed": 2,
+  "results": [
+    { "url": "192.168.1.201:443", "status": "restored" },
+    { "url": "192.168.1.202:443", "status": "failed", "error": "connection refused" }
+  ]
+}
+```
+
+### `middleware ssh` — SSH to Middleware
+
+```bash
+jpy middleware ssh <IP>
+```
+
+### `middleware restart` — Restart boxCore Service
+
+```bash
+jpy middleware restart [filter flags]
+```
 
 ---
 
-## 4. Operational Scenarios (AI Training Data)
+## Device Management (`middleware device`)
 
-This section maps **User Intent** to **Precise Command Execution**. AI agents should prioritize these patterns to ensure non-interactive success.
+### Common Filter Flags
 
-### 4.1 Device Control Scenarios
+| Flag | Alias | Description |
+|------|-------|-------------|
+| `--group` | `-g` | Server group name |
+| `--server` | `-s` | Server address fuzzy match |
+| `--uuid` | `-u` | Device UUID fuzzy match |
+| `--seat` | — | Seat number |
+| `--authorized` | — | Authorized servers only |
+| `--filter-online` | — | Filter by online status |
+| `--filter-adb` | — | Filter by ADB status |
+| `--filter-usb` | — | Filter by USB mode (true=USB, false=OTG) |
+| `--filter-has-ip` | — | Filter by IP presence |
+| `--filter-uuid` | — | Filter by UUID presence |
+| `--interactive` | `-i` | Interactive selection mode |
+| `--all` | — | Execute on all matched devices |
+| `--output` | `-o` | Output mode (tui/plain/json) |
 
-**Scenario 1: Batch Reboot Specific Subnet**
-- **User Intent**: "Reboot all devices on servers starting with 192.168.23."
-- **Reasoning**: Use `-s` for fuzzy match, `--all` to skip TUI.
-- **Command**:
-  ```bash
-  jpy-cli middleware device reboot -s "192.168.23" --all
-  ```
+### `device list` — List Device Details
 
-**Scenario 2: Turn Off ADB for Security**
-- **User Intent**: "Disable ADB on all currently online devices."
-- **Reasoning**: Filter online devices (`--filter-online true`), set ADB off (`--set off`), execute batch (`--all`).
-- **Command**:
-  ```bash
-  jpy-cli middleware device adb --set off --filter-online true --all
-  ```
+```bash
+jpy middleware device list [filters] [-o json]
+```
 
-**Scenario 3: Switch to Host Mode (OTG)**
-- **User Intent**: "Switch all devices in the 'lab' group to OTG mode."
-- **Reasoning**: Group filter (`-g`), set mode (`-m host`), execute batch (`--all`).
-- **Command**:
-  ```bash
-  jpy-cli middleware device usb -m host -g "lab" --all
-  ```
+**JSON**: `{ "total": N, "devices": [{ "server", "seat", "uuid", "ip", "online", "biz_online", "usb_mode", "adb", "model", "android" }] }`
 
-**Scenario 4: View Device Logs (Single Target)**
-- **User Intent**: "Show me the logs for seat 5 on server 192.168.1.100."
-- **Reasoning**: Specific target required for log streaming.
-- **Command**:
-  ```bash
-  jpy-cli middleware device log -s "192.168.1.100" --seat 5
-  ```
+### `device status` — Server Status & Statistics
 
-**Scenario 5: Filter Devices by UUID Status**
-- **User Intent**: "List only devices that have UUIDs."
-- **Reasoning**: Use `--filter-uuid true` to filter devices with UUIDs.
-- **Command**:
-  ```bash
-  jpy-cli middleware device list --filter-uuid true
-  ```
+```bash
+jpy middleware device status [filters] [--detail] [-o json]
+```
 
-**Scenario 6: Filter Servers by UUID Count**
-- **User Intent**: "Show servers with more than 10 UUIDs."
-- **Reasoning**: Use `--uuid-count-gt 10` to filter servers by UUID count.
-- **Command**:
-  ```bash
-  jpy-cli middleware device status --uuid-count-gt 10
-  ```
+Additional status-specific filters: `--auth-failed`, `--fw-has/--fw-not`, `--speed-gt/--speed-lt`, `--cluster-contains/--cluster-not-contains`, `--sn-gt/--sn-lt`, `--ip-count-gt/--ip-count-lt`, `--biz-online-gt/--biz-online-lt`, `--uuid-count-gt/--uuid-count-lt`
 
-### 4.2 Server Maintenance Scenarios
+**JSON**: `{ "summary": { totals... }, "servers": [{ per-server stats... }] }`
 
-**Scenario 5: Cleanup Dead Servers**
-- **User Intent**: "Remove all servers that are currently reporting errors."
-- **Reasoning**: Use `--has-error` filter, use `--all` to confirm deletion of matched set.
-- **Command**:
-  ```bash
-  jpy-cli middleware remove --has-error --all
-  ```
+### `device export` — Export Device Info
 
-**Scenario 6: Hard Delete Specific Server**
-- **User Intent**: "Permanently delete the server at 10.0.0.5."
-- **Reasoning**: Search by IP (`--search`), force delete (`--force`), confirm (`--all` usually required if search returns matches, or interactive; for AI, assume `--all` if confident).
-- **Command**:
-  ```bash
-  jpy-cli middleware remove --search "10.0.0.5" --force --all
-  ```
+```bash
+jpy middleware device export [file] [filters] [--export-id|--export-ip|--export-uuid|--export-seat|--export-auto] [-o json]
+```
 
-**Scenario 7: Attempt Recovery**
-- **User Intent**: "Try to reconnect all disabled servers."
-- **Command**:
-  ```bash
-  jpy-cli middleware relogin
-  ```
+### `device reboot` — Reboot Devices
 
-### 4.3 Configuration Scenarios
+```bash
+jpy middleware device reboot [filters] [--all] [-o json]
+```
 
-**Scenario 8: Increase Concurrency**
-- **User Intent**: "Set maximum concurrency to 20 for faster scanning."
-- **Command**:
-  ```bash
-  jpy-cli config set max_concurrency 20
-  ```
+Exit codes: 0=all success, 1=partial failure, 2=all failed
 
-**Scenario 9: Debug Mode**
-- **User Intent**: "Enable debug logging."
-- **Command**:
-  ```bash
-  jpy-cli config set log_level debug
-  ```
+### `device usb` — Switch USB Mode
+
+```bash
+jpy middleware device usb --mode <host|device> [filters] [--all] [-o json]
+```
+
+### `device adb` — Control ADB State
+
+```bash
+jpy middleware device adb --set <on|off> [filters] [--all] [-o json]
+```
+
+### `device log` — View Device Log
+
+```bash
+jpy middleware device log -s <server_ip> --seat <seat_number>
+```
 
 ---
 
-## 5. Development Reference
+## Middleware Admin (`middleware admin`)
 
-For developers extending this tool:
-- **Build**: `make build` (local), `make dist` (cross-platform).
-- **Run Source**: Replace `jpy-cli` with `go run main.go` in all examples.
-- **Architecture**:
-    - `pkg/api`: Business logic interfaces.
-    - `pkg/service`: Connection and state management.
-    - `pkg/client/ws`: WebSocket transport.
-    - `cmd`: Cobra command definitions.
+```bash
+jpy middleware admin auto-auth
+jpy middleware admin update-cluster <new_address> [--server <match>] [--group <group>] [--authorized] [--force]
+```
 
 ---
 
-## 6. Real-world Scenarios
+## Cloud Platform (`cloud`)
 
-### Device Initial Online Failure (No IP) - Cycle USB/OTG to fix
-1. **Switch authorized servers, devices with no IP and currently in OTG mode to USB mode.**
-   ```bash
-   .\jpy.exe middleware device usb --mode usb --authorized --filter-has-ip false --filter-usb false
-   ```
+```bash
+jpy cloud config [-o json]
+jpy cloud config init-configs
+jpy cloud stress [--config <file>] [-o json]
+```
 
-2. **Switch back to OTG mode.**
-   ```bash
-   .\jpy.exe middleware device usb --mode host --authorized --filter-has-ip false --filter-usb true
-   ```
+---
 
-3. **Check device status statistics.**
-   ```bash
-   .\jpy.exe middleware device status
-   ```
+## System Admin (`admin`)
 
-4. **Switch all devices currently in USB mode to OTG mode.**
-   ```bash
-   .\jpy.exe middleware device usb --mode host --authorized --filter-usb true
-   ```
+```bash
+jpy admin middleware generate
+jpy admin middleware list
+jpy admin middleware get-root-password
+```
 
-5. **Repeat Steps 1-3:** Loop this process. If the number of devices missing IP does not decrease after 3 consecutive loops, it indicates a likely hardware issue. Stop.
+---
 
-6. **Force Reboot:** Attempt forced reboot (power cycle) for devices that still fail to get IP after mode switching.
-   ```bash
-   .\jpy.exe middleware device reboot --filter-has-ip false
-   ```
+## Local Config (`config`)
 
-7. **Wait and Retry:** Wait approximately 3 minutes, then repeat steps 1-5. If still unresolved, manual intervention is required.
+```bash
+jpy config list
+jpy config get <key>
+jpy config set <key> <value>
+```
 
-### Optimize Efficiency after Adding New Servers: Isolate Login Failures
-1. **Check Status (Triggers Auto-login):**
-   ```bash
-   .\jpy.exe middleware device status
-   ```
+| Config Key | Default | Description |
+|------------|---------|-------------|
+| `log_level` | `info` | Log level |
+| `log_output` | `file` | Output: `console`/`file`/`both` |
+| `max_concurrency` | `5` | Max concurrency |
+| `connect_timeout` | `3` | Connection timeout (seconds) |
 
-2. **Soft-delete Servers with Errors:**
-   ```bash
-   .\jpy.exe middleware remove --has-error
-   ```
+---
 
-3. **Retry Login:** Attempt to re-login soft-deleted servers separately. Successful ones automatically recover. (Recommend looping 3 times).
-   ```bash
-   .\jpy.exe middleware relogin
-   ```
+## Other Commands
 
-### Export Device Information for Analysis
-1. **Export all online devices with ID and UUID:**
-   ```bash
-   .\jpy.exe middleware device export devices.txt --export-id --export-uuid --filter-online true
-   ```
+```bash
+jpy proxy [-p <port>]            # Transparent proxy
+jpy server ssh                   # SSH jump server
+jpy server web                   # Web server
+jpy tools completion-install     # Install shell completion
+jpy log [-f] [-n <lines>] [--grep <filter>]  # CLI operation logs
+```
 
-2. **Export complete device information for specific server range:**
-   ```bash
-   .\jpy.exe middleware device export server_devices.txt -s "192.168.1"
-   ```
+---
 
-### Investigate Logs for Devices Failed to Online (No IP)
-1. **List Only Devices Without IP:**
-   ```bash
-   .\jpy.exe middleware device list --filter-has-ip false
-   ```
+## Operational Scenarios
 
-2.3. Retrieve Log for a Sample Device: Pick one device from the list to inspect internal logs.
-   ```bash
-   .\jpy.exe middleware device log --server 192.168.10.206 --seat 12
-   ```
+### AI Remote Batch Control (JSON Mode)
 
-### Add/Switch Middleware Server Groups
-1. View current active/selected group
-   ```bash
-   .\jpy.exe middleware auth select
-   ```
+```bash
+jpy middleware list -o json
+jpy middleware device status -o json
+jpy middleware device reboot --filter-has-ip false --all -o json
+```
 
-2. Select/Switch to specific group
-   ```bash
-   .\jpy.exe middleware auth select [group]
-   ```
+### Win7 SSH Environment (Plain Mode)
 
-3. Add server to current active group
-   ```bash
-   .\jpy.exe middleware auth login "192.168.0.102" -u admin -p admin
-   ```
+```bash
+jpy middleware device status -o plain
+jpy middleware device list -o plain
+jpy middleware remove --has-error --all -o plain
+```
+
+### Device Initial Online Fix (IP Recovery Loop)
+
+```bash
+# Switch no-IP OTG devices to USB
+jpy middleware device usb --mode device --authorized --filter-has-ip false --filter-usb false --all -o json
+# Switch back to OTG
+jpy middleware device usb --mode host --authorized --filter-has-ip false --filter-usb true --all -o json
+# Check stats
+jpy middleware device status -o json
+# Repeat until IP count stabilizes (3 loops)
+# Force reboot remaining no-IP devices
+jpy middleware device reboot --filter-has-ip false --all -o json
+```
+
+### New Server Onboarding
+
+```bash
+jpy middleware auth create --ip "192.168.1.201-230" -o json
+jpy middleware device status -o json
+jpy middleware remove --has-error --all -o json
+jpy middleware relogin -o json  # repeat 3x
+```
+
+---
+
+## Build & Release
+
+```bash
+make build          # Development build
+make dist           # Cross-platform release (Linux/macOS/Windows amd64+arm64)
+make dist-win7      # Win7 compatible build (Go 1.19, excludes cloud module)
+```
+
+Config: `~/.jpy/config.yaml` | Data: `~/.jpy/servers.json` | Logs: `~/.jpy/logs/jpy.log`

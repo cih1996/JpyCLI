@@ -1,416 +1,731 @@
-# JPY CLI 命令参考手册与 AI 指令指南
+# JPY CLI 命令参考手册
 
-本文档提供了 JPY CLI 工具的全面线性参考。其结构旨在便于 AI 智能体解析以生成正确的命令序列，同时也易于人类操作员阅读。
+JPY 中间件管理命令行工具，支持局域网中间件设备管控和集控平台远程 API 操作。
 
-## 1. 系统概览
+## 命令总览
 
-**工具名称**: `jpy-cli` (开发别名: `go run main.go`)
-**用途**: 管理 JPY 中间件服务器、设备控制 (ADB/USB/电源) 以及授权管理。
-**交互理念**:
-- **默认**: 交互式 TUI (文本用户界面)，便于人类操作。
-- **自动化/AI**: **严格非交互式**。使用特定标志 (`--all`, `--force`, `-s`, `--seat`) 跳过提示。
-
-## 2. 命令协议
-
-### 2.1 全局语法
-```bash
-jpy-cli [scope] [resource] [action] [flags]
+```
+jpy
+├── middleware                # 中间件管理（局域网）
+│   ├── list                  # 列出当前分组的服务器列表
+│   ├── auth                  # 认证和服务器管理
+│   │   ├── login             # 登录服务器
+│   │   ├── create            # 批量生成服务器配置
+│   │   ├── list              # 列出已配置服务器
+│   │   ├── select            # 选择/切换活动分组
+│   │   ├── import            # 从 JSON 文件导入配置
+│   │   ├── export            # 导出当前分组配置
+│   │   └── template          # 生成配置模板
+│   ├── device                # 设备管理
+│   │   ├── list              # 列出设备详情
+│   │   ├── status            # 服务器状态与设备统计
+│   │   ├── export            # 导出设备信息到文件
+│   │   ├── reboot            # 重启设备（电源循环）
+│   │   ├── usb               # 切换 USB 模式
+│   │   ├── adb               # 控制 ADB 状态
+│   │   └── log               # 查看单个设备日志
+│   ├── admin                 # 管理员命令
+│   │   ├── auto-auth         # 自动扫描并授权服务器
+│   │   └── update-cluster    # 批量更新集控平台地址
+│   ├── remove                # 移除/软删除服务器
+│   ├── relogin               # 重新连接已软删除服务器
+│   ├── restart               # 重启 boxCore 服务
+│   └── ssh                   # SSH 连接中间件（自动获取密码）
+├── cloud                     # 集控平台远程 API
+│   ├── config                # 查看/修改集控平台配置
+│   │   └── init-configs      # 创建示例改机配置文件
+│   └── stress                # 改机压力测试
+├── admin                     # 系统管理命令
+│   └── middleware
+│       ├── generate          # 生成授权码
+│       ├── list              # 列出授权码
+│       └── get-root-password # 获取 Root 密码
+├── config                    # 本地配置管理
+│   ├── list                  # 列出所有配置
+│   ├── get                   # 获取配置项
+│   └── set                   # 设置配置项
+├── server                    # 后台服务
+│   ├── ssh                   # 启动 SSH 跳板机
+│   └── web                   # 启动 Web 服务
+├── proxy                     # 透明代理
+├── tools                     # 工具集
+│   ├── middleware create     # 批量生成中间件配置
+│   └── completion-install    # 安装 Shell 补全
+└── log                       # 查看 CLI 操作日志
 ```
 
-### 2.2 全局标志
-| 标志 | 类型 | 描述 |
-| :--- | :--- | :--- |
-| `--debug` | boolean | 启用调试日志和详细输出。 |
-| `--log-level` | string | 设置日志级别: `debug`, `info`, `warn`, `error`。 |
-| `--config` | string | 指定自定义配置文件路径。 |
+---
 
-### 2.3 通用筛选标志 (设备范围)
-用于 `device list`, `device status`, 和 `device control` 命令。
-| 标志 | 别名 | 描述 | 示例 |
-| :--- | :--- | :--- | :--- |
-| `--server` | `-s` | 服务器 IP/URL 关键词 (模糊匹配)。 | `-s "192.168.1"` |
-| `--group` | `-g` | 服务器分组名称。 | `-g "default"` |
-| `--seat` | | 指定盘位号 (整数)。 | `--seat 5` |
-| `--uuid` | `-u` | 设备 UUID (模糊匹配)。 | `-u "f73a9c"` |
-| `--authorized`| | 仅筛选已授权的服务器。 | `--authorized` |
-| `--filter-online`| | 按设备在线状态筛选。 | `--filter-online true` |
-| `--filter-adb` | | 按 ADB 开启状态筛选。 | `--filter-adb true` |
-| `--filter-usb` | | 按 USB 模式筛选 (true=Device/USB, false=Host/OTG)。 | `--filter-usb false` |
-| `--filter-uuid` | | 筛选UUID存在状态 (true/false)。 | `--filter-uuid true` |
-| `--filter-has-ip` | | 筛选IP存在状态 (true/false)。 | `--filter-has-ip false` |
-| `--uuid-count-gt` | | 筛选UUID数量大于指定值的服务器。 | `--uuid-count-gt 10` |
-| `--uuid-count-lt` | | 筛选UUID数量小于指定值的服务器。 | `--uuid-count-lt 5` |
+## 全局标志
+
+| 标志 | 类型 | 说明 |
+|------|------|------|
+| `--debug` | bool | 启用调试日志（同时输出到控制台） |
+| `--log-level` | string | 日志级别：`debug`/`info`/`warn`/`error` |
 
 ---
 
-## 3. 命令库
+## 输出模式 `--output` / `-o`
 
-### 3.1 范围: 中间件设备 (`middleware device`)
-管理和控制已连接的设备。
+大部分命令支持三种输出模式：
 
-#### `list`
-- **意图**: 获取符合条件的设备详细列表。
-- **语法**: `jpy-cli middleware device list [flags]`
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| `tui` | 默认，交互式 TUI 界面 | 人工操作 |
+| `plain` | 纯文本 Tab 分隔 | 脚本解析、Win7 SSH 环境 |
+| `json` | 结构化 JSON | AI/程序解析 |
 
-#### `export`
-- **意图**: 导出设备信息到文件，支持自定义字段。
-- **语法**: `jpy-cli middleware device export [output-file] [flags]`
-- **关键标志**:
-    - `--export-id`: 导出设备ID（根据服务器地址生成）。
-    - `--export-ip`: 导出设备IP地址。
-    - `--export-uuid`: 导出设备序列号。
-    - `--export-seat`: 导出设备机位号。
-    - `--export-auto`: 智能导出模式：自动补齐缺失的IP地址（适用于有SN但IP读取失败的设备），只导出有UUID的设备，并记录统计信息。
-- **默认行为**: 如果不指定任何标志，导出所有字段，格式为：`ID\tUUID\tIP\tSeat`
-- **使用场景**:
-  - **DHCP配置**: 当部分设备IP读取失败但SN存在时，使用 `--export-auto` 模式可以智能推断并补齐缺失的IP地址，生成完整的设备列表用于DHCP服务器配置
-  - **批量设备管理**: 导出设备信息用于自动化脚本处理
-  - **设备清单**: 创建完整的设备清单，包含所有必要的连接信息
+### 支持 `--output` 的命令一览
 
-#### `status`
-- **意图**: 获取聚合的服务器状态和设备计数。
-- **语法**: `jpy-cli middleware device status [flags]`
-- **关键标志**:
-    - `--detail`: 显示详细授权信息 (SN, 集控平台地址, 授权名称)。
-    - **高级筛选**:
-        - `--auth-failed`: 筛选授权状态非成功的服务器。
-        - `--fw-has`: 筛选固件版本包含指定字符串的服务器。
-        - `--fw-not`: 筛选固件版本不包含指定字符串的服务器。
-        - `--speed-gt`: 筛选网络速率大于指定值(Mbps)的服务器。
-        - `--speed-lt`: 筛选网络速率小于指定值(Mbps)的服务器。
-        - `--cluster-contains`: 筛选集控平台地址包含指定字符串的服务器。
-        - `--cluster-not-contains`: 筛选集控平台地址不包含指定字符串的服务器。
-        - `--sn-gt`: 筛选序列号大于指定值的服务器 (字符串比较)。
-        - `--sn-lt`: 筛选序列号小于指定值的服务器 (字符串比较)。
-        - `--ip-count-gt`: 筛选IP数大于指定值的服务器。
-        - `--ip-count-lt`: 筛选IP数小于指定值的服务器。
-        - `--biz-online-gt`: 筛选业务在线数大于指定值的服务器。
-        - `--biz-online-lt`: 筛选业务在线数小于指定值的服务器。
+| 命令 | tui | plain | json |
+|------|-----|-------|------|
+| `middleware list` | ✅ | ✅ | ✅ |
+| `middleware remove` | ✅ | ✅ | ✅ |
+| `middleware relogin` | ✅ | ✅ | ✅ |
+| `middleware auth login` | ✅ | ✅ | ✅ |
+| `middleware auth create` | ✅ | ✅ | ✅ |
+| `middleware auth list` | ✅ | ✅ | ✅ |
+| `middleware auth select` | ✅ | ✅ | ✅ |
+| `middleware device list` | ✅ | ✅ | ✅ |
+| `middleware device status` | ✅ | ✅ | ✅ |
+| `middleware device export` | ✅ | ✅ | ✅ |
+| `middleware device reboot` | ✅ | ✅ | ✅ |
+| `middleware device usb` | ✅ | ✅ | ✅ |
+| `middleware device adb` | ✅ | ✅ | ✅ |
+| `cloud config` | - | ✅ | ✅ |
+| `cloud stress` | ✅ | ✅ | ✅ |
 
-#### `reboot`
-- **意图**: 对设备进行电源循环 (重启)。
-- **语法**: `jpy-cli middleware device reboot [flags]`
-- **关键标志**:
-    - `--all`: 对所有匹配的设备执行操作，无需确认。
-
-#### `usb`
-- **意图**: 切换 USB MUX 模式。
-- **语法**: `jpy-cli middleware device usb [flags]`
-- **关键标志**:
-    - `-m, --mode`: 目标模式 (`host` 为 OTG, `device` 为 USB)。
-    - `--all`: 无需确认直接执行。
-
-#### `adb`
-- **意图**: 开启或关闭 ADB 调试功能。
-- **语法**: `jpy-cli middleware device adb [flags]`
-- **关键标志**:
-    - `--set`: 目标状态 (`on` 或 `off`)。
-    - `--all`: 无需确认直接执行。
-
-#### `log`
-- **意图**: 实时监控**单个**设备的日志。
-- **语法**: `jpy-cli middleware device log [flags]`
-- **约束**: 必须通过 `-s` 和 `--seat` 指定单个设备。
-- **自动化**: 自动处理 USB 切换 -> ADB 开启 -> Shell 连接 -> Tail 日志全流程。
+> **Win7 兼容**：Win7 SSH 环境不支持 TUI raw mode，使用 `-o plain` 或 `-o json` 避免崩溃。
 
 ---
 
-### 3.2 范围: 中间件服务器 (`middleware`)
-管理中间件服务器实例。
+## 中间件管理 (`middleware`)
 
-#### `remove`
-- **意图**: 从活跃列表中移除 (软删除) 服务器。
-- **语法**: `jpy-cli middleware remove [flags]`
-- **关键标志**:
-    - `--search`: 匹配服务器 URL/名称的关键词。
-    - `--force`: 硬删除 (永久) 而非软删除。
-    - `--has-error`: 仅针对连接错误的服务器。
-    - `--all`: 针对所有匹配的服务器 (需谨慎使用)。
+### `middleware list` — 列出服务器
 
-#### `relogin`
-- **意图**: 尝试重新激活/连接已软删除的服务器。
-- **语法**: `jpy-cli middleware relogin`
+```bash
+# TUI 交互式浏览
+jpy middleware list
 
-#### `auth login`
-- **意图**: 认证并添加新的中间件服务器。
-- **语法**: `jpy-cli middleware auth login [flags]`
+# JSON 输出（AI 解析）
+jpy middleware list -o json
 
-#### `auth create`
-- **意图**: 批量生成中间件服务器配置并添加到当前分组。
-- **语法**: `jpy-cli middleware auth create [flags]`
-- **模式**:
-    - **交互式**: 默认模式 (若未提供标志)。
-    - **非交互式 (批量)**: 使用标志指定参数。
-- **关键标志**:
-    - `-i, --ip`: IP 范围，支持逗号分隔多个区间 (例如: `192.168.1.201-210,192.168.2.100`)。
-    - `-P, --port`: 服务器端口 (默认: 443)。
-    - `-u, --username`: 管理员用户名 (默认: admin)。
-    - `-p, --password`: 管理员密码 (默认: admin)。
+# Plain 纯文本（脚本）
+jpy middleware list -o plain
+```
 
-#### `auth export`
-- **意图**: 将当前分组配置导出为 `servers.json` (LocalServerConfig 格式)。
-- **语法**: `jpy-cli middleware auth export [flags]`
-- **关键标志**:
-    - `-o, --output`: 输出文件路径 (默认: `servers.json`)。
-- **语法**: `jpy-cli middleware auth login [url] [flags]`
-- **标志**: `-u <user>`, `-p <password>`, `-g <group>`.
-
-#### `auth list`
-- **意图**: 列出已配置的服务器。
-- **语法**: `jpy-cli middleware auth list [flags]`
-
-#### `auth import`
-- **意图**: 从 JSON 文件批量导入服务器。
-- **语法**: `jpy-cli middleware auth import [file]`
-
-#### `ssh`
-- **意图**: 通过 SSH 连接中间件服务器 (自动获取 Root 密码)。
-- **语法**: `jpy-cli middleware ssh [ip]`
-- **前置条件**: 需要运维登录 (Operation Login)，CLI 会自动处理。
-- **行为**:
-    1. 连接 22 端口获取 Banner 密钥。
-    2. 使用 Admin API 解密 Root 密码。
-    3. 生成连接命令 (若安装了 `sshpass` 则直接生成可执行命令)。
-
-#### `restart`
-- **意图**: 重启选中设备的 boxCore 服务。
-- **语法**: `jpy-cli middleware restart [flags]`
-- **注意**: 支持并发执行和通用筛选器（分组、服务器、UUID、机位等）。
+**JSON 结构**:
+```json
+{
+  "group": "default",
+  "total": 3,
+  "servers": [
+    { "url": "192.168.1.201:443", "username": "admin", "status": "ok" }
+  ]
+}
+```
 
 ---
 
-### 3.3 范围: 管理员 (`admin`)
-系统管理和授权管理。
+### `middleware auth` — 认证与分组管理
 
-#### `middleware admin auto-auth`
-- **意图**: 自动扫描并授权待处理的中间件服务器。
-- **语法**: `jpy-cli middleware admin auto-auth`
+#### `auth login` — 登录服务器
 
-#### `middleware admin update-cluster`
-- **意图**: 批量更新中间件服务器的集控平台地址 (MgtCenter) 并与管理后台同步。
-- **语法**: `jpy-cli middleware admin update-cluster [new_address] [flags]`
-- **关键标志**:
-    - `--server`: 筛选服务器地址/名称 (支持正则)。
-    - `--group`: 指定服务器分组。
-    - `--authorized`: 按授权状态筛选 (true/false)。
-    - `--force`: 强制更新（即使地址一致也重新提交）。
+```bash
+jpy middleware auth login <url> -u <用户名> -p <密码> [-g <分组>] [-o json]
+```
 
-#### `admin device generate`
-- **意图**: 生成新的授权码。
-- **语法**: `jpy-cli admin device generate`
+| 标志 | 别名 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--username` | `-u` | — | 用户名（必填） |
+| `--password` | `-p` | — | 密码（必填） |
+| `--group` | `-g` | `default` | 目标分组 |
+| `--output` | `-o` | `tui` | 输出模式 |
 
-#### `admin device list`
-- **意图**: 列出已生成的授权码。
-- **语法**: `jpy-cli admin device list`
+```bash
+# 示例
+jpy middleware auth login "192.168.1.100:443" -u admin -p admin -g production -o json
+```
 
----
+**JSON 输出**:
+```json
+{ "url": "192.168.1.100:443", "group": "production", "success": true }
+```
 
-### 3.4 范围: 系统 (`config`, `log`)
-
-#### `config`
-- **意图**: 读取/写入本地配置。
-- **语法**:
-    - `jpy-cli config list`
-    - `jpy-cli config get <key>`
-    - `jpy-cli config set <key> <value>`
-
-#### `log`
-- **意图**: 追踪 CLI 自身的操作日志 (`jpy.log`)。
-- **语法**: `jpy-cli log [flags]`
-- **标志**: `-f` (跟随), `-n` (行数), `--grep` (过滤)。
+**Plain 输出**: `OK\t192.168.1.100:443\tproduction`
 
 ---
 
-## 4. 操作场景 (AI 训练数据)
+#### `auth create` — 批量生成服务器配置
 
-本节将 **用户意图** 映射到 **精确的命令执行**。AI 智能体应优先参考这些模式以确保非交互式操作的成功。
+```bash
+jpy middleware auth create --ip <IP范围> [-P <端口>] [-u <用户名>] [-p <密码>] [-o json]
+```
 
-### 4.1 设备控制场景
+| 标志 | 别名 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--ip` | `-i` | — | IP 范围，逗号分隔（如 `192.168.1.201-210,192.168.2.100`） |
+| `--port` | `-P` | `443` | 端口 |
+| `--username` | `-u` | `admin` | 用户名 |
+| `--password` | `-p` | `admin` | 密码 |
+| `--output` | `-o` | `tui` | 输出模式 |
 
-**场景 1: 批量重启特定网段**
-- **用户意图**: "重启所有服务器地址以 192.168.23 开头的设备。"
-- **推理**: 使用 `-s` 进行模糊匹配，使用 `--all` 跳过 TUI。
-- **命令**:
-  ```bash
-  jpy-cli middleware device reboot -s "192.168.23" --all
-  ```
+> **注意**: `-o json` 或 `-o plain` 模式必须提供 `--ip` 参数。未提供 `--ip` 时进入交互模式。
 
-**场景 2: 出于安全关闭 ADB**
-- **用户意图**: "关闭所有当前在线设备的 ADB。"
-- **推理**: 筛选在线设备 (`--filter-online true`)，设置 ADB 为关 (`--set off`)，执行批量操作 (`--all`)。
-- **命令**:
-  ```bash
-  jpy-cli middleware device adb --set off --filter-online true --all
-  ```
+```bash
+# 批量添加
+jpy middleware auth create --ip "192.168.1.201-220,192.168.2.101-110" -o json
+```
 
-**场景 3: 切换到 Host 模式 (OTG)**
-- **用户意图**: "将 'lab' 分组中的所有设备切换到 OTG 模式。"
-- **推理**: 分组筛选 (`-g`)，设置模式 (`-m host`)，执行批量操作 (`--all`)。
-- **命令**:
-  ```bash
-  jpy-cli middleware device usb -m host -g "lab" --all
-  ```
-
-**场景 4: 查看设备日志 (单个目标)**
-- **用户意图**: "显示服务器 192.168.1.100 上 5 号盘位的日志。"
-- **推理**: 日志流式传输需要指定唯一目标。
-- **命令**:
-  ```bash
-  jpy-cli middleware device log -s "192.168.1.100" --seat 5
-  ```
-
-**场景 5: 按UUID状态筛选设备**
-- **用户意图**: "只列出有UUID的设备。"
-- **推理**: 使用 `--filter-uuid true` 筛选有UUID的设备。
-- **命令**:
-  ```bash
-  jpy-cli middleware device list --filter-uuid true
-  ```
-
-**场景 6: 按UUID数量筛选服务器**
-- **用户意图**: "显示UUID数量大于10的服务器。"
-- **推理**: 使用 `--uuid-count-gt 10` 按UUID数量筛选服务器。
-- **命令**:
-  ```bash
-  jpy-cli middleware device status --uuid-count-gt 10
-  ```
-
-**场景 7: 导出设备信息到文件**
-- **用户意图**: "将所有在线设备的ID和UUID导出到文件。"
-- **推理**: 使用 `--filter-online true` 筛选在线设备，使用 `--export-id` 和 `--export-uuid` 导出指定字段。
-- **命令**:
-  ```bash
-  jpy-cli middleware device export devices.txt --export-id --export-uuid --filter-online true
-  ```
-
-**场景 8: 导出特定服务器设备信息**
-- **用户意图**: "导出192.168.1网段所有设备的完整信息。"
-- **推理**: 使用 `-s "192.168.1"` 筛选特定服务器，不指定导出字段时默认导出所有字段。
-- **命令**:
-  ```bash
-  jpy-cli middleware device export 192_168_1_devices.txt -s "192.168.1"
-  ```
-
-### 4.2 服务器维护场景
-
-**场景 5: 清理死链服务器**
-- **用户意图**: "移除所有当前报错的服务器。"
-- **推理**: 使用 `--has-error` 筛选，使用 `--all` 确认删除匹配集合。
-- **命令**:
-  ```bash
-  jpy-cli middleware remove --has-error --all
-  ```
-
-**场景 6: 硬删除特定服务器**
-- **用户意图**: "永久删除 IP 为 10.0.0.5 的服务器。"
-- **推理**: 按 IP 搜索 (`--search`)，强制删除 (`--force`)，确认 (`--all` 通常在搜索有匹配时需要，对于 AI，如果确信匹配则使用 `--all`)。
-- **命令**:
-  ```bash
-  jpy-cli middleware remove --search "10.0.0.5" --force --all
-  ```
-
-**场景 7: 尝试恢复**
-- **用户意图**: "尝试重新连接所有已禁用的服务器。"
-- **命令**:
-  ```bash
-  jpy-cli middleware relogin
-  ```
-
-### 4.3 配置场景
-
-**场景 8: 增加并发数**
-- **用户意图**: "将最大并发数设置为 20 以加快扫描速度。"
-- **命令**:
-  ```bash
-  jpy-cli config set max_concurrency 20
-  ```
-
-**场景 9: 调试模式**
-- **用户意图**: "启用调试日志。"
-- **命令**:
-  ```bash
-  jpy-cli config set log_level debug
-  ```
+**JSON 输出**:
+```json
+{ "group": "default", "added": 30, "duplicate": 0, "urls": ["192.168.1.201:443", ...] }
+```
 
 ---
 
-## 5. 开发参考
+#### `auth list` — 列出已配置服务器
 
-供扩展此工具的开发者参考：
-- **构建**: `make build` (本地), `make dist` (跨平台)。
-- **运行源码**: 在所有示例中将 `jpy-cli` 替换为 `go run main.go`。
-- **架构**:
-    - `pkg/api`: 业务逻辑接口。
-    - `pkg/service`: 连接和状态管理。
-    - `pkg/client/ws`: WebSocket 传输层。
-    - `cmd`: Cobra 命令定义。
+```bash
+jpy middleware auth list [--details] [-o json]
+```
 
+| 标志 | 说明 |
+|------|------|
+| `--details` | 显示详细信息（包含 Token 状态等） |
+| `--output` / `-o` | 输出模式 |
 
+---
 
-## 6. 实战场景
+#### `auth select` — 选择/切换活动分组
 
-# 添加、切换中间件服务器分组
-1. 查看当前活动/选择分组
-.\jpy.exe middleware auth select
+```bash
+# 查看所有分组
+jpy middleware auth select -o json
 
-2. 选择使用指定分组内的服务器
-.\jpy.exe middleware auth select [group]
+# 切换分组
+jpy middleware auth select <分组名> -o json
+```
 
-3. 添加服务器到当前活动分组
-.\jpy.exe middleware auth login "192.168.0.102" -u admin -p admin
+**JSON 输出（查看）**:
+```json
+{
+  "active_group": "default",
+  "groups": [
+    { "name": "default", "count": 10, "active": true },
+    { "name": "production", "count": 25, "active": false }
+  ]
+}
+```
 
+---
 
-# 设备初次上线没有获取到IP，需尝试切换USB和OTG使得设备成功获取到IP
-1. 将已授权的服务器，没有IP及当前处于OTG的设备切换到USB模式
-.\jpy.exe middleware device usb --mode usb --authorized --filter-has-ip false --filter-usb false
+#### `auth import` — 导入服务器配置
 
-2. 重新切换回 OTG模式
-.\jpy.exe middleware device usb --mode host --authorized --filter-has-ip false --filter-usb true
+```bash
+jpy middleware auth import <文件路径>
+```
 
-3. 统计设备情况
- .\jpy.exe middleware device status
+#### `auth export` — 导出服务器配置
 
-4. 把所有处于USB模式全部切换到OTG
-.\jpy.exe middleware device usb --mode host --authorized --filter-usb true
+```bash
+jpy middleware auth export [-o <输出文件>]
+```
 
-5. 第1到第3一直循环执行，直到连续循环3次IP缺失数量还是保持没有减少，说明可能是设备本身原因，结束
+> 注意：`auth export` 的 `-o` 是输出文件路径，不是输出模式。
 
-6. 尝试强制重启（断电在通电）经过多次切换模式依然不上线IP的设备
-.\jpy.exe middleware device reboot --filter-has-ip false
+#### `auth template` — 生成配置模板
 
-7. 约等待3分钟后，重新执行前面的步骤（1-5）最后最终实在无力解决
+```bash
+jpy middleware auth template
+```
 
-# 初次添加服务器到分组后，扫描服务器状态并暂时隔离登录失败服务器提高后续使用效率
-1. 统计设备，将会自动登录
-.\jpy.exe middleware device status
+---
 
-2. 软删除登录失败的服务器
-.\jpy.exe middleware remove --has-error
+### `middleware remove` — 移除服务器
 
-3. 单独尝试重新登录软失败的服务器，成功的会自动恢复删除状态（建议循环3次）
-.\jpy.exe middleware relogin
+```bash
+jpy middleware remove [--search <关键词>] [--has-error] [--force] [--all] [-o json]
+```
 
+| 标志 | 说明 |
+|------|------|
+| `--search` | 匹配服务器 URL 的关键词 |
+| `--has-error` | 仅匹配连接错误的服务器 |
+| `--force` | 硬删除（永久移除，非软删除） |
+| `--all` | 对所有匹配项执行，跳过确认 |
+| `--output` / `-o` | 输出模式 |
 
-# 抽查上线失败的设备（IP无法获取到的）执行日志
-1. 只列出无IP的设备
-.\jpy.exe middleware device list --filter-has-ip false
+> **非交互模式**（`-o json/plain`）必须提供 `--all`、`--has-error` 或 `--search` 之一。
 
-2. 根据列出的设备随意抽查1个去获取设备内的日志
-.\jpy.exe middleware device log --server 192.168.10.206 --seat 12
+```bash
+# 软删除所有报错服务器
+jpy middleware remove --has-error --all -o json
 
+# 硬删除指定服务器
+jpy middleware remove --search "10.0.0.5" --force --all -o json
+```
 
-# 添加、切换中间件服务器分组
-1. 查看当前活动/选择分组
-.\jpy.exe middleware auth select
+---
 
-2. 选择使用指定分组内的服务器
-.\jpy.exe middleware auth select [group]
+### `middleware relogin` — 重新连接已软删除服务器
 
-3. 添加服务器到当前活动分组
-.\jpy.exe middleware auth login "192.168.0.102" -u admin -p admin
+```bash
+jpy middleware relogin [-o json]
+```
 
-# 获取中间件root密码（连接到中间件shell需要）
-.\jpy.exe middleware ssh "192.168.0.102"
+**JSON 输出**:
+```json
+{
+  "total": 5,
+  "restored": 3,
+  "failed": 2,
+  "results": [
+    { "url": "192.168.1.201:443", "status": "restored" },
+    { "url": "192.168.1.202:443", "status": "failed", "error": "connection refused" }
+  ]
+}
+```
 
-# 查看某个设备的日志
-.\jpy.exe middleware device log --server 192.168.0.102 --seat 12
+---
+
+### `middleware ssh` — SSH 连接中间件
+
+```bash
+jpy middleware ssh <IP>
+```
+
+自动获取 Root 密码，生成 SSH 连接命令。若系统安装了 `sshpass` 则直接生成可执行命令。
+
+---
+
+### `middleware restart` — 重启 boxCore 服务
+
+```bash
+jpy middleware restart [通用筛选标志]
+```
+
+支持通用设备筛选标志（`-g`、`-s`、`-u`、`--seat` 等）。
+
+---
+
+## 中间件设备管理 (`middleware device`)
+
+### 通用筛选标志
+
+所有设备子命令共享以下标志：
+
+| 标志 | 别名 | 说明 | 示例 |
+|------|------|------|------|
+| `--group` | `-g` | 服务器分组名 | `-g production` |
+| `--server` | `-s` | 服务器地址模糊匹配 | `-s "192.168.1"` |
+| `--uuid` | `-u` | 设备 UUID 模糊匹配 | `-u "f73a9c"` |
+| `--seat` | — | 指定机位号 | `--seat 5` |
+| `--authorized` | — | 仅已授权服务器 | `--authorized` |
+| `--filter-online` | — | 按在线状态筛选 | `--filter-online true` |
+| `--filter-adb` | — | 按 ADB 状态筛选 | `--filter-adb true` |
+| `--filter-usb` | — | 按 USB 模式筛选（true=USB, false=OTG） | `--filter-usb false` |
+| `--filter-has-ip` | — | 按 IP 存在状态筛选 | `--filter-has-ip false` |
+| `--filter-uuid` | — | 按 UUID 存在状态筛选 | `--filter-uuid true` |
+| `--interactive` | `-i` | 交互式选择模式 | `-i` |
+| `--all` | — | 对所有匹配设备执行 | `--all` |
+| `--output` | `-o` | 输出模式（tui/plain/json） | `-o json` |
+
+---
+
+### `device list` — 列出设备详情
+
+```bash
+jpy middleware device list [筛选标志] [-o json]
+```
+
+**JSON 输出**:
+```json
+{
+  "total": 120,
+  "devices": [
+    {
+      "server": "192.168.1.201:443",
+      "seat": 1,
+      "uuid": "ABCD1234",
+      "ip": "10.0.0.101",
+      "online": true,
+      "biz_online": true,
+      "usb_mode": "otg",
+      "adb": false,
+      "model": "Redmi Note 12",
+      "android": "13"
+    }
+  ]
+}
+```
+
+**Plain 输出**: `SERVER\tSEAT\tUUID\tMODEL\tANDROID\tONLINE\tBIZ\tIP\tADB\tUSB`
+
+---
+
+### `device status` — 服务器状态统计
+
+```bash
+jpy middleware device status [筛选标志] [--detail] [-o json]
+```
+
+**专属高级筛选标志**:
+
+| 标志 | 说明 |
+|------|------|
+| `--detail` | 显示 SN、集控地址、授权名称 |
+| `--auth-failed` | 筛选授权失败服务器 |
+| `--fw-has` / `--fw-not` | 按固件版本筛选 |
+| `--speed-gt` / `--speed-lt` | 按网络速率筛选（Mbps） |
+| `--cluster-contains` / `--cluster-not-contains` | 按集控地址筛选 |
+| `--sn-gt` / `--sn-lt` | 按 SN 筛选（字符串比较） |
+| `--ip-count-gt` / `--ip-count-lt` | 按 IP 数量筛选 |
+| `--biz-online-gt` / `--biz-online-lt` | 按业务在线数筛选 |
+| `--uuid-count-gt` / `--uuid-count-lt` | 按 UUID 数量筛选 |
+
+**JSON 输出**:
+```json
+{
+  "summary": {
+    "total_servers": 10,
+    "online_servers": 9,
+    "total_devices": 300,
+    "biz_online": 280,
+    "ip_count": 295,
+    "uuid_count": 298,
+    "adb_count": 0,
+    "usb_count": 5,
+    "otg_count": 295
+  },
+  "servers": [
+    {
+      "address": "192.168.1.201:443",
+      "status": "Online",
+      "authorized": true,
+      "license_status": "成功",
+      "sn": "SN12345",
+      "device_count": 30,
+      "biz_online_count": 28,
+      "ip_count": 29,
+      "uuid_count": 30,
+      "adb_count": 0,
+      "usb_count": 0,
+      "otg_count": 30
+    }
+  ]
+}
+```
+
+---
+
+### `device export` — 导出设备信息
+
+```bash
+jpy middleware device export [文件名] [筛选标志] [导出标志] [-o json]
+```
+
+**导出标志**:
+| 标志 | 说明 |
+|------|------|
+| `--export-id` | 导出设备 ID |
+| `--export-ip` | 导出设备 IP |
+| `--export-uuid` | 导出设备 UUID |
+| `--export-seat` | 导出机位号 |
+| `--export-auto` | 智能导出（自动补齐缺失 IP，仅含有 UUID 的设备） |
+
+> 不指定导出标志时默认导出全部字段：`ID\tUUID\tIP\tSeat`
+
+---
+
+### `device reboot` — 重启设备
+
+```bash
+jpy middleware device reboot [筛选标志] [--all] [-o json]
+```
+
+**JSON 输出**:
+```json
+{
+  "total": 5,
+  "success": 4,
+  "failed": 1,
+  "results": [
+    { "server": "192.168.1.201:443", "seat": 1, "status": "ok" },
+    { "server": "192.168.1.201:443", "seat": 3, "status": "failed", "error": "timeout" }
+  ]
+}
+```
+
+退出码：0=全部成功，1=部分失败，2=全部失败
+
+---
+
+### `device usb` — 切换 USB 模式
+
+```bash
+jpy middleware device usb --mode <host|device> [筛选标志] [--all] [-o json]
+```
+
+| 标志 | 别名 | 说明 |
+|------|------|------|
+| `--mode` | `-m` | 目标模式：`host`(OTG) / `device`(USB) |
+
+---
+
+### `device adb` — 控制 ADB 状态
+
+```bash
+jpy middleware device adb --set <on|off> [筛选标志] [--all] [-o json]
+```
+
+| 标志 | 说明 |
+|------|------|
+| `--set` | 目标状态：`on` / `off` |
+
+---
+
+### `device log` — 查看设备日志
+
+```bash
+jpy middleware device log -s <服务器IP> --seat <机位号>
+```
+
+> 必须指定单个设备。自动完成 USB 切换 → ADB 开启 → Shell 连接 → Tail 日志全流程。
+
+---
+
+## 中间件管理员 (`middleware admin`)
+
+### `admin auto-auth` — 自动授权
+
+```bash
+jpy middleware admin auto-auth
+```
+
+自动扫描并授权待处理的中间件服务器。
+
+### `admin update-cluster` — 更新集控平台地址
+
+```bash
+jpy middleware admin update-cluster <新地址> [--server <匹配>] [--group <分组>] [--authorized] [--force]
+```
+
+| 标志 | 说明 |
+|------|------|
+| `--server` | 服务器地址匹配（正则） |
+| `--group` | 指定分组 |
+| `--authorized` | 按授权状态筛选 |
+| `--force` | 即使地址一致也重新提交 |
+
+---
+
+## 集控平台远程 API (`cloud`)
+
+### `cloud config` — 配置管理
+
+```bash
+# 查看当前配置
+jpy cloud config -o json
+
+# 创建示例改机配置文件
+jpy cloud config init-configs
+```
+
+### `cloud stress` — 改机压力测试
+
+```bash
+jpy cloud stress [--config <配置文件>] [-o json]
+```
+
+---
+
+## 系统管理 (`admin`)
+
+```bash
+# 生成授权码
+jpy admin middleware generate
+
+# 列出授权码
+jpy admin middleware list
+
+# 获取中间件 Root 密码
+jpy admin middleware get-root-password
+```
+
+---
+
+## 本地配置 (`config`)
+
+```bash
+# 列出所有配置
+jpy config list
+
+# 获取配置项
+jpy config get <key>
+
+# 设置配置项
+jpy config set <key> <value>
+```
+
+常用配置项：
+| 配置键 | 默认值 | 说明 |
+|--------|--------|------|
+| `log_level` | `info` | 日志级别 |
+| `log_output` | `file` | 日志输出：`console`/`file`/`both` |
+| `max_concurrency` | `5` | 最大并发数 |
+| `connect_timeout` | `3` | 连接超时（秒） |
+
+---
+
+## 其他命令
+
+### `proxy` — 透明代理
+
+```bash
+jpy proxy [-p <端口>]
+```
+
+### `server ssh` — SSH 跳板机
+
+```bash
+jpy server ssh
+```
+
+### `server web` — Web 服务
+
+```bash
+jpy server web
+```
+
+### `tools completion-install` — 安装补全
+
+```bash
+jpy tools completion-install
+```
+
+### `log` — 查看 CLI 日志
+
+```bash
+jpy log [-f] [-n <行数>] [--grep <过滤词>]
+```
+
+---
+
+## 实战场景
+
+### 场景一：AI 远程批量操控（JSON 模式）
+
+```bash
+# 1. 查看服务器列表
+jpy middleware list -o json
+
+# 2. 查看设备状态
+jpy middleware device status -o json
+
+# 3. 批量重启无 IP 设备
+jpy middleware device reboot --filter-has-ip false --all -o json
+
+# 4. 查看执行结果
+jpy middleware device status --authorized -o json
+```
+
+### 场景二：Win7 SSH 环境操作（Plain 模式）
+
+```bash
+# TUI 在 Win7 会崩溃，必须使用 plain 或 json
+jpy middleware device status -o plain
+jpy middleware device list -o plain
+jpy middleware remove --has-error --all -o plain
+```
+
+### 场景三：设备初次上线（循环修复 IP）
+
+```bash
+# 1. 无 IP + OTG 的设备 → 切换到 USB
+jpy middleware device usb --mode device --authorized --filter-has-ip false --filter-usb false --all -o json
+
+# 2. 切回 OTG
+jpy middleware device usb --mode host --authorized --filter-has-ip false --filter-usb true --all -o json
+
+# 3. 检查统计
+jpy middleware device status -o json
+
+# 4. 所有 USB 切回 OTG
+jpy middleware device usb --mode host --authorized --filter-usb true --all -o json
+
+# 5. 循环 1-3，连续 3 次 IP 数量无增长则停止
+# 6. 强制重启仍无 IP 的设备
+jpy middleware device reboot --filter-has-ip false --all -o json
+```
+
+### 场景四：新服务器上线优化
+
+```bash
+# 1. 批量添加服务器
+jpy middleware auth create --ip "192.168.1.201-230" -o json
+
+# 2. 触发状态扫描（自动登录）
+jpy middleware device status -o json
+
+# 3. 隔离登录失败的服务器
+jpy middleware remove --has-error --all -o json
+
+# 4. 尝试恢复（建议循环 3 次）
+jpy middleware relogin -o json
+```
+
+### 场景五：设备信息导出
+
+```bash
+# 导出所有在线设备 ID 和 UUID
+jpy middleware device export devices.txt --export-id --export-uuid --filter-online true
+
+# 智能导出（自动补齐 IP）
+jpy middleware device export dhcp.txt --export-auto -s "192.168.1"
+
+# JSON 格式导出
+jpy middleware device export -o json > devices.json
+```
+
+### 场景六：服务器分组管理
+
+```bash
+# 查看分组列表
+jpy middleware auth select -o json
+
+# 切换分组
+jpy middleware auth select production -o json
+
+# 添加服务器到当前分组
+jpy middleware auth login "192.168.0.102" -u admin -p admin -o json
+```
+
+### 场景七：排障抽查
+
+```bash
+# 列出无 IP 设备
+jpy middleware device list --filter-has-ip false -o plain
+
+# 抽查一台设备日志
+jpy middleware device log -s 192.168.10.206 --seat 12
+```
+
+---
+
+## 构建与发布
+
+```bash
+# 开发编译
+make build
+
+# 跨平台发布（Linux/macOS/Windows amd64+arm64）
+make dist
+
+# Win7 兼容编译（Go 1.19，排除 cloud 模块）
+make dist-win7
+```
+
+配置文件位置：`~/.jpy/config.yaml`
+服务器数据：`~/.jpy/servers.json`
+日志文件：`~/.jpy/logs/jpy.log`
