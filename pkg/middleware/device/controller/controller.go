@@ -266,6 +266,172 @@ func (c *DeviceController) executeTerminalBatch(devices []model.DeviceInfo, acti
 	return nil
 }
 
+// BatchResult 表示单个设备的操作结果（静默模式使用）
+type BatchResult struct {
+	Server string
+	Seat   int
+	UUID   string
+	OK     bool
+	Error  string
+}
+
+// executeBatchCollect 静默批量执行（不打印到stdout），返回结构化结果
+func (c *DeviceController) executeBatchCollect(devices []model.DeviceInfo, action func(seat int, api *api.DeviceAPI) error, progressCb func(int, int)) ([]BatchResult, error) {
+	devicesByServer := make(map[string][]model.DeviceInfo)
+	for _, d := range devices {
+		devicesByServer[d.ServerURL] = append(devicesByServer[d.ServerURL], d)
+	}
+
+	var results []BatchResult
+	totalDevices := len(devices)
+	processedCount := 0
+
+	for serverURL, serverDevices := range devicesByServer {
+		server, found := c.findServerConfig(serverURL)
+		if !found {
+			for _, d := range serverDevices {
+				processedCount++
+				results = append(results, BatchResult{
+					Server: serverURL, Seat: d.Seat, UUID: d.UUID,
+					OK: false, Error: "缺少服务器配置",
+				})
+				if progressCb != nil {
+					progressCb(processedCount, totalDevices)
+				}
+			}
+			continue
+		}
+
+		ws, err := c.connector.ConnectGuard(server)
+		if err != nil {
+			for _, d := range serverDevices {
+				processedCount++
+				results = append(results, BatchResult{
+					Server: serverURL, Seat: d.Seat, UUID: d.UUID,
+					OK: false, Error: fmt.Sprintf("连接失败: %v", err),
+				})
+				if progressCb != nil {
+					progressCb(processedCount, totalDevices)
+				}
+			}
+			continue
+		}
+
+		deviceAPI := api.NewDeviceAPI(ws, server.URL, server.Token)
+
+		for _, d := range serverDevices {
+			processedCount++
+			err := action(d.Seat, deviceAPI)
+			r := BatchResult{Server: serverURL, Seat: d.Seat, UUID: d.UUID, OK: err == nil}
+			if err != nil {
+				r.Error = err.Error()
+			}
+			results = append(results, r)
+			if progressCb != nil {
+				progressCb(processedCount, totalDevices)
+			}
+		}
+
+		ws.Close()
+	}
+
+	return results, nil
+}
+
+// executeTerminalBatchCollect 静默终端批量执行（用于ADB关闭等需要终端连接的操作）
+func (c *DeviceController) executeTerminalBatchCollect(devices []model.DeviceInfo, action func(seat int, term *terminal.TerminalSession) error, progressCb func(int, int)) ([]BatchResult, error) {
+	devicesByServer := make(map[string][]model.DeviceInfo)
+	for _, d := range devices {
+		devicesByServer[d.ServerURL] = append(devicesByServer[d.ServerURL], d)
+	}
+
+	var results []BatchResult
+	totalDevices := len(devices)
+	processedCount := 0
+
+	for serverURL, serverDevices := range devicesByServer {
+		server, found := c.findServerConfig(serverURL)
+		if !found {
+			for _, d := range serverDevices {
+				processedCount++
+				results = append(results, BatchResult{
+					Server: serverURL, Seat: d.Seat, UUID: d.UUID,
+					OK: false, Error: "缺少服务器配置",
+				})
+				if progressCb != nil {
+					progressCb(processedCount, totalDevices)
+				}
+			}
+			continue
+		}
+
+		for _, d := range serverDevices {
+			processedCount++
+
+			ws, err := c.connector.ConnectDeviceTerminal(server, int64(d.Seat))
+			if err != nil {
+				results = append(results, BatchResult{
+					Server: serverURL, Seat: d.Seat, UUID: d.UUID,
+					OK: false, Error: fmt.Sprintf("连接终端失败: %v", err),
+				})
+				if progressCb != nil {
+					progressCb(processedCount, totalDevices)
+				}
+				continue
+			}
+
+			term := terminal.NewTerminalSession(ws, int64(d.Seat))
+			err = func() error {
+				defer term.Close()
+				if err := term.Init(); err != nil {
+					return fmt.Errorf("终端初始化失败: %v", err)
+				}
+				return action(d.Seat, term)
+			}()
+
+			r := BatchResult{Server: serverURL, Seat: d.Seat, UUID: d.UUID, OK: err == nil}
+			if err != nil {
+				r.Error = err.Error()
+			}
+			results = append(results, r)
+			if progressCb != nil {
+				progressCb(processedCount, totalDevices)
+			}
+		}
+	}
+
+	return results, nil
+}
+
+// RebootBatchCollect 静默批量重启，返回结构化结果
+func (c *DeviceController) RebootBatchCollect(devices []model.DeviceInfo, progressCb func(int, int)) ([]BatchResult, error) {
+	return c.executeBatchCollect(devices, func(seat int, api *api.DeviceAPI) error {
+		return api.RebootDevice(seat)
+	}, progressCb)
+}
+
+// SwitchUSBBatchCollect 静默批量切换USB模式，返回结构化结果
+func (c *DeviceController) SwitchUSBBatchCollect(devices []model.DeviceInfo, otg bool, progressCb func(int, int)) ([]BatchResult, error) {
+	return c.executeBatchCollect(devices, func(seat int, api *api.DeviceAPI) error {
+		return api.SwitchUSBMode(seat, otg)
+	}, progressCb)
+}
+
+// ControlADBBatchCollect 静默批量ADB控制，返回结构化结果
+func (c *DeviceController) ControlADBBatchCollect(devices []model.DeviceInfo, enable bool, progressCb func(int, int)) ([]BatchResult, error) {
+	if enable {
+		return c.executeBatchCollect(devices, func(seat int, api *api.DeviceAPI) error {
+			return api.ControlADB(seat, enable)
+		}, progressCb)
+	}
+	return c.executeTerminalBatchCollect(devices, func(seat int, term *terminal.TerminalSession) error {
+		if err := term.Exec("settings put global adb_enabled 0"); err != nil {
+			return fmt.Errorf("发送关闭指令失败: %v", err)
+		}
+		return nil
+	}, progressCb)
+}
+
 // RestartServiceBatch executes the restart service command on multiple devices concurrently.
 func (c *DeviceController) RestartServiceBatch(devices []model.DeviceInfo, service string, actionCode int) error {
 	// Deduplicate servers

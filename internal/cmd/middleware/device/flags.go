@@ -23,7 +23,8 @@ type CommonFlags struct {
 	AuthorizedOnly string // "true"/"false"/""
 
 	Interactive bool
-	All         bool // 跳过交互模式并处理所有匹配设备
+	All         bool   // 跳过交互模式并处理所有匹配设备
+	Output      string // 输出模式: tui/plain/json
 }
 
 // AddCommonFlags 为命令添加统一的筛选参数
@@ -45,6 +46,7 @@ func AddCommonFlags(cmd *cobra.Command, opts *CommonFlags) {
 
 	cmd.Flags().BoolVarP(&opts.Interactive, "interactive", "i", false, "交互式选择模式")
 	cmd.Flags().BoolVar(&opts.All, "all", false, "跳过交互模式并处理所有匹配设备")
+	cmd.Flags().StringVarP(&opts.Output, "output", "o", "tui", "输出模式 (tui/plain/json)")
 }
 
 // ToSelectorOptions 将通用Flag转换为Selector选项
