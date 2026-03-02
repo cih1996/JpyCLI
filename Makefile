@@ -31,14 +31,21 @@ dist:
 
 # Win7 兼容版：使用 Go 1.19.13 + 降级依赖编译
 # 在临时目录操作，不影响主项目 go.mod
+# 注意：cloud 命令依赖 goTool v1.0.51（需要 Go 1.24），Win7 版不包含 cloud 功能
 dist-win7:
 	@echo "Building Win7 compatible version..."
 	@rm -rf $(WIN7_BUILD_DIR)
 	@mkdir -p $(WIN7_BUILD_DIR)
-	@cp -r cmd pkg internal sdk go.mod go.sum $(WIN7_BUILD_DIR)/
+	@cp -r cmd pkg internal sdk third_party go.mod go.sum $(WIN7_BUILD_DIR)/
 	@cp build/win7/logger.go $(WIN7_BUILD_DIR)/pkg/logger/logger.go
+	@# 移除 cloud 命令（依赖 Go 1.24+ 的 goTool），Win7 版不需要云端功能
+	@rm -rf $(WIN7_BUILD_DIR)/internal/cmd/cloud $(WIN7_BUILD_DIR)/pkg/cloud
+	@sed -i '' '/cloudCmd "jpy-cli\/internal\/cmd\/cloud"/d' $(WIN7_BUILD_DIR)/internal/cmd/root.go
+	@sed -i '' '/rootCmd.AddCommand(cloudCmd.NewCloudCmd())/d' $(WIN7_BUILD_DIR)/internal/cmd/root.go
+	@# 移除 adminApi replace 和 require（cloud 专用依赖）
+	@sed -i '' '/adminApi/d' $(WIN7_BUILD_DIR)/go.mod
 	@cd $(WIN7_BUILD_DIR) && \
-		sed -i '' 's/^go 1.24.2/go 1.19/' go.mod && \
+		sed -i '' 's/^go [0-9].*/go 1.19/' go.mod && \
 		$(GO119) get golang.org/x/crypto@v0.14.0 golang.org/x/sys@v0.13.0 golang.org/x/term@v0.13.0 golang.org/x/text@v0.13.0 && \
 		$(GO119) mod tidy && \
 		CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO119) build -ldflags="-s -w" -o $(APP_NAME)-windows-amd64-win7.exe ./cmd/jpy-cli
