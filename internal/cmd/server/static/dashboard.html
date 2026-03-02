@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JPY Device Manager</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .device-card { transition: all 0.2s; }
+        .device-card:hover { transform: translateY(-2px); box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        .status-dot { height: 8px; width: 8px; border-radius: 50%; display: inline-block; }
+        .bg-online { background-color: #10B981; }
+        .bg-offline { background-color: #6B7280; }
+        [v-cloak] { display: none; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen text-gray-800">
+    <div id="app" class="p-4 w-full mx-auto" v-cloak>
+        <!-- Progress Toast -->
+        <div v-if="progressData.show" class="fixed bottom-4 right-4 bg-white rounded-lg shadow-lg p-4 w-80 z-50 border border-blue-100 transition-all transform translate-y-0 opacity-100">
+            <div class="flex justify-between items-center mb-2">
+                <span class="text-sm font-bold text-gray-700">Processing...</span>
+                <span class="text-xs text-gray-500">{{ progressData.percent }}%</span>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+                <div class="bg-blue-600 h-2.5 rounded-full transition-all duration-300" :style="{ width: progressData.percent + '%' }"></div>
+            </div>
+            <div class="text-xs text-gray-500 truncate" :title="progressData.message">{{ progressData.message }}</div>
+            <div class="text-xs text-gray-400 mt-1 flex justify-between">
+                <span>{{ progressData.current }} / {{ progressData.total }}</span>
+            </div>
+        </div>
+
+        <!-- Header -->
+        <header class="mb-6 flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-lg shadow space-y-4 md:space-y-0">
+            <div class="flex items-center space-x-3">
+                <div class="h-8 w-8 bg-blue-600 rounded flex items-center justify-center text-white font-bold">J</div>
+                <h1 class="text-xl font-bold text-gray-800">JPY Device Manager</h1>
+                <span v-if="wsStatus === 'connected'" class="text-xs px-2 py-1 bg-green-100 text-green-800 rounded-full">Connected</span>
+                <span v-else class="text-xs px-2 py-1 bg-red-100 text-red-800 rounded-full">Disconnected</span>
+            </div>
+            
+            <!-- Tabs -->
+            <div class="flex space-x-1 bg-gray-200 p-1 rounded">
+                <button @click="currentTab = 'devices'" :class="['px-4 py-1.5 rounded text-sm font-medium transition', currentTab === 'devices' ? 'bg-white shadow text-blue-600' : 'text-gray-600 hover:text-gray-800']">Devices</button>
+                <button @click="currentTab = 'status'" :class="['px-4 py-1.5 rounded text-sm font-medium transition', currentTab === 'status' ? 'bg-white shadow text-blue-600' : 'text-gray-600 hover:text-gray-800']">Server Status</button>
+                <button @click="currentTab = 'failed'" :class="['px-4 py-1.5 rounded text-sm font-medium transition', currentTab === 'failed' ? 'bg-white shadow text-red-600' : 'text-gray-600 hover:text-gray-800']">
+                    Failed Servers
+                    <span v-if="failedServers.length > 0" class="ml-1 px-1.5 py-0.5 bg-red-100 text-red-600 rounded-full text-xs">{{ failedServers.length }}</span>
+                </button>
+            </div>
+
+            <div class="flex space-x-2">
+                <button @click="refreshData" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium transition flex items-center">
+                    <span v-if="loading" class="animate-spin mr-2">⟳</span>
+                    Refresh
+                </button>
+                <button @click="openConfigModal" class="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm font-medium transition">
+                    Servers
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        
+        <!-- DEVICES TAB -->
+        <div v-if="currentTab === 'devices'" class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <!-- Sidebar / Filters -->
+            <div class="lg:col-span-1 space-y-6">
+                <!-- Filters -->
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <h2 class="font-bold mb-4 text-gray-700 border-b pb-2">Filters</h2>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Group</label>
+                            <select v-model="filters.group" class="w-full rounded border-gray-300 border p-2 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                <option v-for="(servers, name) in configData.groups" :key="name" :value="name">
+                                    {{ name }} ({{ servers ? servers.length : 0 }})
+                                </option>
+                                <option v-if="!configData.groups || Object.keys(configData.groups).length === 0" value="default">default</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Server Pattern</label>
+                            <input v-model="filters.server" type="text" class="w-full rounded border-gray-300 border p-2 text-sm focus:ring-blue-500 focus:border-blue-500" placeholder="e.g. 192.168.1.10">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">UUID / Model</label>
+                            <input v-model="filters.uuid" type="text" class="w-full rounded border-gray-300 border p-2 text-sm focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Seat</label>
+                            <input v-model.number="filters.seat" type="number" class="w-full rounded border-gray-300 border p-2 text-sm focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        
+                        <div class="space-y-3 pt-2">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Authorized Only</label>
+                                <select v-model="filters.authorized_only" class="w-full rounded border-gray-300 border p-2 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                    <option value="">Any</option>
+                                    <option value="true">Yes</option>
+                                    <option value="false">No</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Online Only</label>
+                                <select v-model="filters.filter_online" class="w-full rounded border-gray-300 border p-2 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                    <option value="">Any</option>
+                                    <option value="true">Yes</option>
+                                    <option value="false">No</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">ADB Enabled Only</label>
+                                <select v-model="filters.filter_adb" class="w-full rounded border-gray-300 border p-2 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                    <option value="">Any</option>
+                                    <option value="true">Yes</option>
+                                    <option value="false">No</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Has IP Only</label>
+                                <select v-model="filters.filter_has_ip" class="w-full rounded border-gray-300 border p-2 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                    <option value="">Any</option>
+                                    <option value="true">Yes</option>
+                                    <option value="false">No</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Has UUID Only</label>
+                                <select v-model="filters.filter_has_uuid" class="w-full rounded border-gray-300 border p-2 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                    <option value="">Any</option>
+                                    <option value="true">Yes</option>
+                                    <option value="false">No</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">USB Mode Only</label>
+                                <select v-model="filters.filter_usb" class="w-full rounded border-gray-300 border p-2 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                    <option value="">Any</option>
+                                    <option value="true">Yes (USB)</option>
+                                    <option value="false">No (OTG)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Actions -->
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <h2 class="font-bold mb-4 text-gray-700 border-b pb-2">Batch Actions</h2>
+                    <p class="text-xs text-gray-500 mb-4">Actions apply to <span class="font-bold text-gray-800">{{ stats.total }}</span> matching devices.</p>
+                    
+                    <div class="space-y-2">
+                        <button @click="confirmAction('reboot')" class="w-full py-2 bg-orange-100 text-orange-700 rounded hover:bg-orange-200 text-sm font-medium transition">
+                            Reboot All
+                        </button>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button @click="confirmAction('usb', 'host')" class="py-2 bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200 text-sm font-medium transition">
+                                Set OTG (Host)
+                            </button>
+                            <button @click="confirmAction('usb', 'device')" class="py-2 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 text-sm font-medium transition">
+                                Set USB (Device)
+                            </button>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button @click="confirmAction('adb', 'on')" class="py-2 bg-green-100 text-green-700 rounded hover:bg-green-200 text-sm font-medium transition">
+                                Enable ADB
+                            </button>
+                            <button @click="confirmAction('adb', 'off')" class="py-2 bg-red-100 text-red-700 rounded hover:bg-red-200 text-sm font-medium transition">
+                                Disable ADB
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Content Area -->
+            <div class="lg:col-span-3">
+                <!-- Stats Bar -->
+                <div class="bg-white p-4 rounded-lg shadow mb-6 flex flex-wrap gap-4 text-sm">
+                     <div class="flex items-center space-x-2">
+                        <span class="w-3 h-3 rounded-full bg-green-500"></span>
+                        <span class="text-gray-600">Online: <b>{{ stats.online }}</b></span>
+                    </div>
+                     <div class="flex items-center space-x-2">
+                        <span class="w-3 h-3 rounded-full bg-green-600"></span>
+                        <span class="text-gray-600">Biz Online: <b>{{ stats.biz_online }}</b></span>
+                    </div>
+                     <div class="flex items-center space-x-2">
+                        <span class="w-3 h-3 rounded-full bg-blue-500"></span>
+                        <span class="text-gray-600">USB Mode: <b>{{ stats.usb }}</b></span>
+                    </div>
+                     <div class="flex items-center space-x-2">
+                        <span class="w-3 h-3 rounded-full bg-indigo-500"></span>
+                        <span class="text-gray-600">ADB Enabled: <b>{{ stats.adb }}</b></span>
+                    </div>
+                     <div class="flex items-center space-x-2">
+                        <span class="w-3 h-3 rounded-full bg-gray-500"></span>
+                        <span class="text-gray-600">OTG Mode: <b>{{ stats.otg }}</b></span>
+                    </div>
+                     <div class="flex items-center space-x-2">
+                        <span class="text-gray-600">Total: <b>{{ stats.total }}</b></span>
+                    </div>
+                </div>
+
+                <!-- Device Table -->
+                <div class="bg-white rounded-lg shadow overflow-hidden overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Server / Seat</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4">Device Info</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Network</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Mode</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            <tr v-for="device in sortedDevices" :key="device.UUID + device.Seat" class="hover:bg-gray-50 transition">
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <div class="text-sm font-medium text-gray-900">{{ formatUrl(device.ServerURL) }}</div>
+                                    <div class="text-xs text-gray-500 font-mono">Seat #{{ device.Seat }}</div>
+                                </td>
+                                <td class="px-6 py-4 min-w-[200px]">
+                                    <div class="text-sm text-gray-900 font-medium break-words">{{ device.Model || 'Unknown Model' }}</div>
+                                    <div class="text-xs text-gray-500 font-mono break-all" :title="device.UUID">{{ formatUUID(device.UUID) }}</div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span :class="['px-2 inline-flex text-xs leading-5 font-semibold rounded-full', device.IsOnline ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800']">
+                                        {{ device.IsOnline ? 'Online' : 'Offline' }}
+                                    </span>
+                                    <div v-if="device.BizOnline" class="mt-1 text-xs text-green-600">Biz Online</div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <div class="text-sm text-gray-900">{{ device.IP || '-' }}</div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                    <div class="flex flex-col space-y-1">
+                                        <span v-if="device.USBMode" class="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-800 w-max">USB Device</span>
+                                        <span v-else class="text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 w-max">OTG Host</span>
+                                        
+                                        <span v-if="device.ADBEnabled" class="text-xs px-2 py-0.5 rounded bg-green-100 text-green-800 w-max">ADB On</span>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr v-if="devices.length === 0 && !loading">
+                                <td colspan="5" class="px-6 py-10 text-center text-gray-500">
+                                    No devices found matching current filters.
+                                </td>
+                            </tr>
+                            <tr v-if="loading">
+                                <td colspan="5" class="px-6 py-10 text-center text-gray-500">
+                                    <div class="animate-spin inline-block w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="flex justify-between items-center mt-4 bg-white p-3 rounded-lg shadow">
+                    <div class="text-sm text-gray-500">
+                        Showing page {{ devicePage }} of {{ Math.ceil((stats.total || 0) / devicePageSize) || 1 }} (Total {{ stats.total || 0 }})
+                    </div>
+                    <div class="flex space-x-2">
+                        <button @click="devicePage > 1 && (devicePage--, fetchDevices())" :disabled="devicePage === 1" class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50 text-sm">Prev</button>
+                        <span class="px-3 py-1 text-sm font-medium">Page {{ devicePage }}</span>
+                        <button @click="devicePage * devicePageSize < (stats.total || 0) && (devicePage++, fetchDevices())" :disabled="devicePage * devicePageSize >= (stats.total || 0)" class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50 text-sm">Next</button>
+                    </div>
+                    <div>
+                        <select v-model="devicePageSize" @change="devicePage=1; fetchDevices()" class="border rounded p-1 text-sm">
+                            <option :value="50">50 / page</option>
+                            <option :value="100">100 / page</option>
+                            <option :value="200">200 / page</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- FAILED SERVERS TAB -->
+        <div v-if="currentTab === 'failed'" class="space-y-6">
+            <div class="bg-white p-4 rounded-lg shadow">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="font-bold text-gray-700">Failed / Disabled Servers</h2>
+                    <button @click="reloginServer()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium transition">
+                        Relogin All Disabled
+                    </button>
+                </div>
+                
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Server URL</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Error Message</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            <tr v-for="server in failedServers" :key="server.server_url" class="hover:bg-gray-50">
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <div class="text-sm font-medium text-gray-900">{{ formatUrl(server.server_url) }}</div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span v-if="server.disabled" class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                                        Disabled (Soft Removed)
+                                    </span>
+                                    <span v-else class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                                        Connection Failed
+                                    </span>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <div class="text-sm text-red-600 break-all">
+                                        {{ server.last_login_error || server.error || 'Unknown Error' }}
+                                    </div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                                    <button @click="reloginServer(server.server_url)" class="text-blue-600 hover:text-blue-900 bg-blue-50 px-3 py-1 rounded transition">Relogin</button>
+                                    <button @click="removeServer(server.server_url, false)" class="text-red-600 hover:text-red-900 bg-red-50 px-3 py-1 rounded transition">Forget</button>
+                                </td>
+                            </tr>
+                            <tr v-if="failedServers.length === 0">
+                                <td colspan="4" class="px-6 py-10 text-center text-gray-500">
+                                    No failed or disabled servers found.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- STATUS TAB -->
+        <div v-if="currentTab === 'status'" class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <!-- Sidebar -->
+            <div class="lg:col-span-1 space-y-6">
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <h2 class="font-bold mb-4 text-gray-700 border-b pb-2">Status Filters</h2>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Group</label>
+                            <select v-model="filters.group" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                <option v-for="(servers, name) in configData.groups" :key="name" :value="name">
+                                    {{ name }} ({{ servers ? servers.length : 0 }})
+                                </option>
+                                <option v-if="!configData.groups || Object.keys(configData.groups).length === 0" value="default">default</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Server Pattern</label>
+                            <input v-model="filters.server" type="text" class="w-full rounded border-gray-300 border p-2 text-sm" placeholder="e.g. 192.168.1">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Authorized Only</label>
+                            <select v-model="filters.authorized_only" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                <option value="">Any</option>
+                                <option value="true">Yes</option>
+                                <option value="false">No</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Online Only</label>
+                            <select v-model="filters.filter_online" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                <option value="">Any</option>
+                                <option value="true">Yes</option>
+                                <option value="false">No</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">ADB Enabled Only</label>
+                            <select v-model="filters.filter_adb" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                <option value="">Any</option>
+                                <option value="true">Yes</option>
+                                <option value="false">No</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Has IP Only</label>
+                            <select v-model="filters.filter_has_ip" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                <option value="">Any</option>
+                                <option value="true">Yes</option>
+                                <option value="false">No</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">USB Mode Only</label>
+                            <select v-model="filters.filter_usb" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                <option value="">Any</option>
+                                <option value="true">Yes (USB)</option>
+                                <option value="false">No (OTG)</option>
+                            </select>
+                        </div>
+
+                        <div class="pt-2 border-t space-y-3">
+                             <label class="flex items-center text-sm">
+                                <input type="checkbox" v-model="filters.show_disabled" class="mr-2 text-gray-600 rounded">
+                                Show Disabled / Removed
+                            </label>
+                             <label class="flex items-center text-sm">
+                                <input type="checkbox" v-model="filters.auth_failed" class="mr-2 text-red-600 rounded">
+                                Auth Failed Only
+                            </label>
+
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Biz Online ></label>
+                                    <input v-model.number="filters.biz_online_gt" type="number" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Biz Online <</label>
+                                    <input v-model.number="filters.biz_online_lt" type="number" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                </div>
+                            </div>
+                            
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">IP Count ></label>
+                                    <input v-model.number="filters.ip_count_gt" type="number" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">IP Count <</label>
+                                    <input v-model.number="filters.ip_count_lt" type="number" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">UUID Count ></label>
+                                    <input v-model.number="filters.uuid_count_gt" type="number" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">UUID Count <</label>
+                                    <input v-model.number="filters.uuid_count_lt" type="number" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                </div>
+                            </div>
+
+                             <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Net Speed ></label>
+                                    <input v-model.number="filters.net_speed_gt" type="number" step="0.1" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Net Speed <</label>
+                                    <input v-model.number="filters.net_speed_lt" type="number" step="0.1" class="w-full rounded border-gray-300 border p-2 text-sm">
+                                </div>
+                            </div>
+                        </div>
+
+                         <div class="space-y-2">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Cluster Contains</label>
+                                <input v-model="filters.cluster_contains" type="text" class="w-full rounded border-gray-300 border p-2 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Cluster Not Contains</label>
+                                <input v-model="filters.cluster_not_contains" type="text" class="w-full rounded border-gray-300 border p-2 text-sm">
+                            </div>
+                             <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Firmware Version Has</label>
+                                <input v-model="filters.fw_version_has" type="text" class="w-full rounded border-gray-300 border p-2 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Firmware Version Not</label>
+                                <input v-model="filters.fw_version_not" type="text" class="w-full rounded border-gray-300 border p-2 text-sm">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Content -->
+            <div class="lg:col-span-3">
+                 <!-- Stats Bar -->
+                <div class="bg-white p-4 rounded-lg shadow mb-6 flex flex-wrap gap-4 text-sm">
+                    <div class="flex items-center space-x-2">
+                        <span class="w-3 h-3 rounded-full bg-green-500"></span>
+                        <span class="text-gray-600">Online: <b>{{ serverTotalStats.online }}</b></span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="w-3 h-3 rounded-full bg-red-500"></span>
+                        <span class="text-gray-600">Offline: <b>{{ serverTotalStats.offline }}</b></span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-gray-600">Total Devices: <b>{{ serverTotalStats.devices }}</b></span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-gray-600">Biz Online: <b>{{ serverTotalStats.bizOnline }}</b></span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-gray-600">IP: <b>{{ serverTotalStats.ipCount }}</b></span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-gray-600">UUID: <b>{{ serverTotalStats.uuidCount }}</b></span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-gray-600">ADB: <b>{{ serverTotalStats.adbCount }}</b></span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-gray-600">USB: <b>{{ serverTotalStats.usbCount }}</b></span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-gray-600">OTG: <b>{{ serverTotalStats.otgCount }}</b></span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-gray-600">Total Servers: <b>{{ serverTotalStats.total }}</b></span>
+                    </div>
+                </div>
+
+                 <div class="bg-white rounded-lg shadow overflow-hidden overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Server</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">License / Status</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Firmware / Network</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device Counts</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        <tr v-for="stat in serverStats" :key="stat.server_url" :class="['hover:bg-gray-50 transition', stat.disabled ? 'bg-gray-50 opacity-75' : '']">
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <div class="text-sm font-medium text-gray-900 flex items-center">
+                                    {{ stat.server_url }}
+                                    <span v-if="stat.disabled" class="ml-2 px-2 py-0.5 text-xs rounded bg-gray-200 text-gray-600">Removed</span>
+                                </div>
+                                <div class="text-xs text-gray-500">{{ stat.control_addr || '-' }}</div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <div v-if="stat.disabled">
+                                    <span class="text-xs text-gray-500">Soft Deleted</span>
+                                </div>
+                                <div v-else>
+                                    <span :class="['px-2 inline-flex text-xs leading-5 font-semibold rounded-full mb-1', stat.status === 'Online' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800']">
+                                        {{ stat.status }}
+                                    </span>
+                                    <div v-if="stat.last_login_error" class="text-xs text-red-600 font-medium mt-1">
+                                        {{ stat.last_login_error }}
+                                    </div>
+                                    <div v-else class="text-xs text-gray-500">
+                                        Auth: <span :class="stat.license_status === '成功' ? 'text-green-600 font-medium' : 'text-red-600'">{{ stat.license_status || 'Unknown' }}</span>
+                                    </div>
+                                    <div class="text-xs text-gray-400 font-mono mt-0.5">{{ stat.sn }}</div>
+                                    <div v-if="stat.license_name" class="text-xs text-gray-500">{{ stat.license_name }}</div>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <div class="text-sm text-gray-900">{{ stat.firmware_version || '-' }}</div>
+                                <div class="text-xs text-gray-500">{{ stat.network_speed || '0 Mbps' }}</div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <div class="grid grid-cols-3 gap-x-4 gap-y-1 text-sm">
+                                    <div class="text-gray-500">Total: <b class="text-gray-900">{{ stat.device_count }}</b></div>
+                                    <div class="text-gray-500">Biz: <b class="text-green-600">{{ stat.biz_online_count }}</b></div>
+                                    <div class="text-gray-500">IP: <b class="text-blue-600">{{ stat.ip_count }}</b></div>
+                                    <div class="text-gray-500">ADB: <b class="text-indigo-600">{{ stat.adb_count }}</b></div>
+                                    <div class="text-gray-500">USB: <b class="text-gray-900">{{ stat.usb_count }}</b></div>
+                                    <div class="text-gray-500">OTG: <b class="text-gray-900">{{ stat.otg_count }}</b></div>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                                <button v-if="!stat.disabled" @click="removeServer(stat.server_url, true)" class="text-yellow-600 hover:text-yellow-900 bg-yellow-50 px-2 py-1 rounded">Disable</button>
+                                <button v-else @click="reloginServer(stat.server_url)" class="text-blue-600 hover:text-blue-900 bg-blue-50 px-2 py-1 rounded">Relogin</button>
+                            </td>
+                        </tr>
+                         <tr v-if="serverStats.length === 0 && !loading">
+                            <td colspan="5" class="px-6 py-10 text-center text-gray-500">
+                                No server status data available.
+                            </td>
+                        </tr>
+                        <tr v-if="loading">
+                            <td colspan="5" class="px-6 py-10 text-center text-gray-500">
+                                <div class="animate-spin inline-block w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+             </div>
+
+             <div class="flex justify-between items-center mt-4 bg-white p-3 rounded-lg shadow">
+                 <div class="text-sm text-gray-500">
+                     Showing page {{ serverPage }} of {{ Math.ceil((serverTotalStats.total || 0) / serverPageSize) || 1 }} (Total {{ serverTotalStats.total || 0 }})
+                 </div>
+                 <div class="flex space-x-2">
+                     <button @click="serverPage > 1 && (serverPage--, fetchStatus())" :disabled="serverPage === 1" class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50 text-sm">Prev</button>
+                     <span class="px-3 py-1 text-sm font-medium">Page {{ serverPage }}</span>
+                     <button @click="serverPage * serverPageSize < (serverTotalStats.total || 0) && (serverPage++, fetchStatus())" :disabled="serverPage * serverPageSize >= (serverTotalStats.total || 0)" class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50 text-sm">Next</button>
+                 </div>
+                 <div>
+                     <select v-model="serverPageSize" @change="serverPage=1; fetchStatus()" class="border rounded p-1 text-sm">
+                         <option :value="50">50 / page</option>
+                         <option :value="100">100 / page</option>
+                         <option :value="200">200 / page</option>
+                     </select>
+                 </div>
+             </div>
+        </div>
+        </div>
+
+        <!-- Config Modal -->
+        <div v-if="showConfig" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 transition-opacity">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+                <div class="p-6 border-b flex justify-between items-center bg-gray-50 rounded-t-lg">
+                    <h2 class="text-xl font-bold text-gray-800">Server Configuration</h2>
+                    <button @click="showConfig = false" class="text-gray-500 hover:text-gray-700">✕</button>
+                </div>
+                
+                <div class="p-6 overflow-y-auto flex-1">
+                    <!-- Add New Server Form -->
+                    <div class="bg-blue-50 p-4 rounded-lg mb-6 border border-blue-100">
+                        <h3 class="font-bold text-blue-800 mb-3 text-sm uppercase">Add / Update Server</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">Server URL</label>
+                                <input v-model="newServer.url" type="text" placeholder="http://192.168.1.100:8080" class="w-full rounded border-gray-300 p-2 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">Group</label>
+                                <input v-model="newServer.group" type="text" placeholder="default" class="w-full rounded border-gray-300 p-2 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">Username</label>
+                                <input v-model="newServer.username" type="text" class="w-full rounded border-gray-300 p-2 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">Password</label>
+                                <input v-model="newServer.password" type="password" class="w-full rounded border-gray-300 p-2 text-sm">
+                            </div>
+                        </div>
+                        <div class="mt-4 flex justify-end">
+                            <button @click="saveServer" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium">
+                                Save Server
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Server List -->
+                    <div v-if="configData.groups">
+                        <div v-for="(servers, groupName) in configData.groups" :key="groupName" class="mb-6">
+                            <h3 class="font-bold text-gray-800 mb-2 border-b pb-1">{{ groupName }} <span class="text-gray-400 text-xs font-normal">({{ servers ? servers.length : 0 }} servers)</span></h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div v-for="server in (servers || [])" :key="server.url" class="bg-gray-50 p-3 rounded border hover:bg-gray-100 relative group">
+                                    <div class="font-mono text-sm font-medium text-gray-800 truncate" :title="server.url">{{ server.url }}</div>
+                                    <div class="text-xs text-gray-500 mt-1 flex justify-between">
+                                        <span>User: {{ server.username || '-' }}</span>
+                                        <span :class="server.last_login_error ? 'text-red-500' : 'text-green-500'">{{ server.last_login_error ? 'Error' : 'OK' }}</span>
+                                    </div>
+                                    
+                                    <div class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1">
+                                        <button @click="editServer(server)" class="p-1 bg-blue-100 text-blue-600 rounded hover:bg-blue-200 text-xs">Edit</button>
+                                        <button @click="removeServer(server.url, groupName)" class="p-1 bg-red-100 text-red-600 rounded hover:bg-red-200 text-xs">Del</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Failed Servers Modal -->
+        <div v-if="showFailedModal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 transition-opacity">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+                <div class="flex items-center text-red-600 mb-4">
+                    <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                    <h3 class="text-lg font-bold">Connection Failures Detected</h3>
+                </div>
+                <p class="text-gray-600 mb-4">
+                    Detected <b>{{ failedConnectionServers.length }}</b> servers with connection failures.
+                    <br><br>
+                    Do you want to soft-delete (disable) them to exclude them from future scans?
+                </p>
+                <div class="flex justify-end space-x-3">
+                    <button @click="showFailedModal = false" class="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-sm font-medium">No, Keep Them</button>
+                    <button @click="softDeleteFailedServers" class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm font-medium">Yes, Disable Them</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const { createApp, ref, reactive, computed, onMounted, watch } = Vue
+
+        createApp({
+            setup() {
+                const ws = ref(null)
+                const wsStatus = ref('disconnected')
+                const currentTab = ref('devices')
+                const devices = ref([])
+                const serverStats = ref([])
+                const remoteDeviceStats = ref(null)
+                const remoteServerStats = ref(null)
+                const loading = ref(false)
+                const isScanning = ref(false)
+                const showConfig = ref(false)
+                const showFailedModal = ref(false)
+                const configData = ref({})
+                
+                // Filters
+                const filters = reactive({
+                    group: 'default',
+                    server: '',
+                    uuid: '',
+                    seat: null,
+                    authorized_only: '',
+                    filter_online: '',
+                    filter_adb: '',
+                    filter_usb: '',
+                    filter_has_ip: '',
+                    filter_has_uuid: '',
+                    
+                    // Status specific
+                    show_disabled: false,
+                    auth_failed: false,
+                    biz_online_gt: '',
+                    biz_online_lt: '',
+                    ip_count_gt: '',
+                    ip_count_lt: '',
+                    uuid_count_gt: '',
+                    uuid_count_lt: '',
+                    net_speed_gt: '',
+                    net_speed_lt: '',
+                    cluster_contains: '',
+                    cluster_not_contains: '',
+                    fw_version_has: '',
+                    fw_version_not: ''
+                })
+
+                // Pagination State
+                const devicePage = ref(1)
+                const devicePageSize = ref(50)
+                const serverPage = ref(1)
+                const serverPageSize = ref(50)
+
+                // Server Form
+                const newServer = reactive({
+                    url: '',
+                    group: 'default',
+                    username: '',
+                    password: ''
+                })
+
+                const progressData = reactive({
+                    show: false,
+                    current: 0,
+                    total: 0,
+                    percent: 0,
+                    message: ''
+                })
+
+                // Computed Stats
+                const stats = computed(() => {
+                    if (remoteDeviceStats.value) return remoteDeviceStats.value
+                    return {
+                        total: devices.value.length,
+                        online: devices.value.filter(d => d.IsOnline).length,
+                        usb: devices.value.filter(d => d.USBMode).length,
+                        adb: devices.value.filter(d => d.ADBEnabled).length,
+                        biz_online: devices.value.filter(d => d.BizOnline).length,
+                        otg: devices.value.filter(d => !d.USBMode).length
+                    }
+                })
+
+                // Active servers for Status Tab
+                const activeServers = computed(() => {
+                    return serverStats.value.filter(s => !s.disabled)
+                })
+
+                // Soft-deleted servers for Failed Servers Tab
+                const failedServers = computed(() => {
+                    return serverStats.value.filter(s => s.disabled)
+                })
+
+                // Currently failing active servers (for modal prompt)
+                const failedConnectionServers = computed(() => {
+                    return serverStats.value.filter(s => !s.disabled && s.status !== 'Online')
+                })
+
+                const serverTotalStats = computed(() => {
+                    if (remoteServerStats.value) return remoteServerStats.value
+                    const all = activeServers.value // Only count active servers
+                    return {
+                        total: all.length,
+                        online: all.filter(s => s.status === 'Online').length,
+                        offline: all.filter(s => s.status !== 'Online').length,
+                        disabled: failedServers.value.length,
+                        devices: all.reduce((acc, s) => acc + (s.device_count || 0), 0),
+                        bizOnline: all.reduce((acc, s) => acc + (s.biz_online_count || 0), 0),
+                        ipCount: all.reduce((acc, s) => acc + (s.ip_count || 0), 0),
+                        uuidCount: all.reduce((acc, s) => acc + (s.uuid_count || 0), 0),
+                        adbCount: all.reduce((acc, s) => acc + (s.adb_count || 0), 0),
+                        usbCount: all.reduce((acc, s) => acc + (s.usb_count || 0), 0),
+                        otgCount: all.reduce((acc, s) => acc + (s.otg_count || 0), 0)
+                    }
+                })
+
+                const getServerOrder = (url) => {
+                    if (!configData.value.groups) return 999
+                    let index = 0
+                    // Iterate groups in a deterministic order if possible, or just as they appear
+                    // Usually there is only 'default'
+                    for (const group in configData.value.groups) {
+                        const servers = configData.value.groups[group]
+                        for (let i = 0; i < servers.length; i++) {
+                            // Compare URLs (handle potential slash differences if needed, but exact match is best)
+                            if (servers[i].url === url) return index + i
+                        }
+                        index += servers.length
+                    }
+                    return 999
+                }
+
+                const sortedDevices = computed(() => {
+                    const devs = [...devices.value]
+                    devs.sort((a, b) => {
+                        // 1. Server Order
+                        const orderA = getServerOrder(a.ServerURL)
+                        const orderB = getServerOrder(b.ServerURL)
+                        if (orderA !== orderB) return orderA - orderB
+                        
+                        // 2. Seat Order
+                        return (a.Seat || 0) - (b.Seat || 0)
+                    })
+                    return devs
+                })
+
+                const connectWS = () => {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+                    const host = window.location.host // Use current host
+                    ws.value = new WebSocket(`${protocol}//${host}/ws/api`)
+                    
+                    ws.value.onopen = () => {
+                        console.log('WS Connected')
+                        wsStatus.value = 'connected'
+                        fetchServers() // Fetch config for sorting
+                    }
+                    
+                    ws.value.onmessage = (event) => {
+                        try {
+                            const resp = JSON.parse(event.data)
+                            handleMessage(resp)
+                        } catch (e) {
+                            console.error('Parse error', e)
+                        }
+                    }
+
+                    ws.value.onclose = () => {
+                        console.log('WS Closed')
+                        wsStatus.value = 'disconnected'
+                        setTimeout(connectWS, 3000)
+                    }
+                }
+
+                const handleMessage = (resp) => {
+                    if (resp.status === 'progress') {
+                        progressData.show = true
+                        progressData.current = resp.data.current
+                        progressData.total = resp.data.total
+                        progressData.percent = resp.data.percent
+                        progressData.message = resp.data.message
+                        return
+                    }
+
+                    // Hide progress on any final response (success or error)
+                    if (['list-devices', 'status-stats', 'action-reboot', 'action-usb', 'action-adb'].includes(resp.id)) {
+                        setTimeout(() => { progressData.show = false }, 500) // Small delay to show 100%
+                    }
+                    
+                    if (['list-devices', 'status-stats'].includes(resp.id) || resp.status === 'error') {
+                        isScanning.value = false
+                    }
+
+                    if (resp.status === 'error') {
+                        loading.value = false
+                        const errMsg = resp.message || resp.error || 'Unknown error'
+                        alert('Error: ' + errMsg) // Show alert on error
+                        return
+                    }
+
+                    switch (resp.id) {
+                        case 'list-devices':
+                            if (resp.data && resp.data.items) {
+                                devices.value = resp.data.items || []
+                                remoteDeviceStats.value = resp.data.stats
+                            } else {
+                                devices.value = resp.data || []
+                                remoteDeviceStats.value = null
+                            }
+                            loading.value = false
+                            break
+                        case 'status-stats':
+                            if (resp.data && resp.data.items) {
+                                serverStats.value = resp.data.items || []
+                                remoteServerStats.value = resp.data.stats
+                            } else {
+                                serverStats.value = resp.data || []
+                                remoteServerStats.value = null
+                            }
+                            // Sort by order index
+                            serverStats.value.sort((a, b) => a.order_index - b.order_index)
+                            loading.value = false
+                            
+                            // Check for failed servers
+                            if (failedConnectionServers.value.length > 0) {
+                                showFailedModal.value = true
+                            }
+                            break
+                        case 'list-servers':
+                            configData.value = resp.data || {}
+                            
+                            // Auto-select group logic
+                            const availableGroups = configData.value.groups ? Object.keys(configData.value.groups) : []
+                            
+                            if (configData.value.active_group && availableGroups.includes(configData.value.active_group)) {
+                                // If current filter is default or invalid, switch to active_group
+                                if (filters.group === 'default' || !availableGroups.includes(filters.group)) {
+                                    filters.group = configData.value.active_group
+                                }
+                            } else if (availableGroups.length > 0) {
+                                // If current selection is invalid, pick the first one
+                                if (!availableGroups.includes(filters.group)) {
+                                     filters.group = availableGroups[0]
+                                }
+                            }
+                            
+                            refreshData()
+                            break
+                        case 'save-server':
+                        case 'remove-server':
+                        case 'remove-server-batch':
+                        case 'relogin-server':
+                            fetchServers() // Refresh config list
+                            refreshData()  // Refresh status/device list
+                            // alert(resp.data) // Optional: show success message
+                            break
+                        case 'action-reboot':
+                        case 'action-usb':
+                        case 'action-adb':
+                            refreshData()
+                            break
+                    }
+                }
+
+                const send = (command, params, id) => {
+                    if (ws.value && ws.value.readyState === WebSocket.OPEN) {
+                        ws.value.send(JSON.stringify({
+                            id: id || command,
+                            command: command,
+                            params: params || {}
+                        }))
+                    }
+                }
+
+                const refreshData = () => {
+                    if (isScanning.value) {
+                        console.log('Scan in progress, skipping refresh')
+                        return
+                    }
+                    loading.value = true
+                    isScanning.value = true
+                    if (currentTab.value === 'devices') {
+                        fetchDevices()
+                    } else {
+                        fetchStatus()
+                    }
+                }
+
+                // Auto-refresh when switching tabs - REMOVED per user request
+                // watch(currentTab, () => {
+                //    refreshData()
+                // })
+
+                const fetchDevices = () => {
+                    const params = { 
+                        ...filters,
+                        page: devicePage.value,
+                        page_size: devicePageSize.value
+                    }
+                    // Clean up empty strings
+                    Object.keys(params).forEach(k => {
+                        if (params[k] === '') delete params[k]
+                    })
+                    send('middleware.device.list', params, 'list-devices')
+                }
+
+                const fetchStatus = () => {
+                    const params = {
+                        ...filters,
+                        page: serverPage.value,
+                        page_size: serverPageSize.value,
+                        detail: true, // Always fetch details for table
+                        show_disabled: filters.show_disabled || currentTab.value === 'failed', // Fetch disabled for failed tab or if filter enabled
+                        disabled_only: currentTab.value === 'failed' // Only disabled for failed tab
+                    }
+                    // Clean up empty strings
+                    Object.keys(params).forEach(k => {
+                        if (params[k] === '') delete params[k]
+                    })
+                    send('middleware.device.status', params, 'status-stats')
+                }
+
+                const fetchServers = () => {
+                    send('config.servers.list', {}, 'list-servers')
+                }
+
+                const openConfigModal = () => {
+                    showConfig.value = true
+                    fetchServers()
+                }
+
+                const saveServer = () => {
+                    if (!newServer.url) return alert('URL is required')
+                    send('config.server.save', newServer, 'save-server')
+                }
+
+                const editServer = (server) => {
+                    newServer.url = server.url
+                    newServer.group = configData.value.groups ? Object.keys(configData.value.groups).find(g => configData.value.groups[g].includes(server)) : 'default'
+                    newServer.username = server.username
+                    newServer.password = server.password
+                }
+
+                const removeServer = (url, arg2) => {
+                    let group = filters.group || 'default'
+                    let soft = false
+
+                    if (typeof arg2 === 'boolean') {
+                        soft = arg2
+                    } else if (typeof arg2 === 'string') {
+                        group = arg2
+                    }
+
+                    const msg = soft ? 'Soft remove (disable) this server?' : 'Permanently remove this server?';
+                    if (confirm(msg)) {
+                        send('config.server.remove', { url, group, soft }, 'remove-server')
+                    }
+                }
+
+                const reloginServer = (url) => {
+                    if (url) {
+                        // Single server relogin
+                        send('config.server.relogin', { group: filters.group || 'default', url }, 'relogin-server')
+                    } else {
+                        // Batch relogin
+                        if (confirm('Relogin/Reconnect all disabled servers in this group?')) {
+                            send('config.server.relogin', { group: filters.group || 'default' }, 'relogin-server')
+                        }
+                    }
+                }
+
+                const softDeleteFailedServers = () => {
+                    if (failedConnectionServers.value.length === 0) return
+                    
+                    // Batch soft delete
+                    const items = failedConnectionServers.value.map(s => ({
+                        url: s.server_url,
+                        group: filters.group || 'default',
+                        soft: true
+                    }))
+
+                    send('config.server.remove_batch', { items: items }, 'remove-server-batch')
+                    showFailedModal.value = false
+                }
+
+                const confirmAction = (action, arg) => {
+                    if (!confirm('Are you sure you want to proceed with this batch action?')) return
+                    
+                    const params = { ...filters }
+                    let command = ''
+                    let id = ''
+
+                    if (action === 'reboot') {
+                        command = 'middleware.device.reboot'
+                        id = 'action-reboot'
+                    } else if (action === 'usb') {
+                        command = 'middleware.device.usb'
+                        params.mode = arg
+                        id = 'action-usb'
+                    } else if (action === 'adb') {
+                        command = 'middleware.device.adb'
+                        params.state = arg
+                        id = 'action-adb'
+                    }
+
+                    send(command, params, id)
+                }
+
+                const formatUrl = (url) => {
+                    return url.replace('http://', '').replace('https://', '').split('/')[0]
+                }
+                
+                const formatUUID = (uuid) => {
+                    if (!uuid) return ''
+                    return uuid
+                }
+
+                watch(currentTab, (newTab) => {
+                    if (newTab === 'devices' && devices.value.length === 0) {
+                        refreshData()
+                    }
+                    if (newTab === 'status' && serverStats.value.length === 0) {
+                        refreshData()
+                    }
+                })
+
+                onMounted(() => {
+                    connectWS()
+                })
+
+                return {
+                    wsStatus,
+                    currentTab,
+                    devices,
+                    serverStats,
+                    serverTotalStats,
+                    loading,
+                    isScanning,
+                    showConfig,
+                    configData,
+                    filters,
+                    newServer,
+                    stats,
+                    sortedDevices,
+                    refreshData,
+                    fetchDevices,
+                    openConfigModal,
+                    saveServer,
+                    editServer,
+                    removeServer,
+                    reloginServer,
+                    confirmAction,
+                    formatUrl,
+                    formatUUID,
+                    progressData,
+                    failedServers,
+                    failedConnectionServers,
+                    showFailedModal,
+                    softDeleteFailedServers,
+                    devicePage,
+                    devicePageSize,
+                    serverPage,
+                    serverPageSize
+                }
+            }
+        }).mount('#app')
+    </script>
+</body>
+</html>
