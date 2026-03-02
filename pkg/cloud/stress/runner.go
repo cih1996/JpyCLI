@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"adminApi/adminChangeOsCtl"
-	"adminApi/adminDeviceCtl"
+	"adminApi/changeOsCtl"
+	"adminApi/userDeviceCtl"
 
 	"jpy-cli/pkg/cloud"
 )
@@ -144,7 +144,7 @@ func (r *Runner) SetLogger(logger func(level, format string, args ...interface{}
 	r.logger = logger
 }
 
-// GetAllDevices 获取所有设备列表
+// GetAllDevices 获取所有设备列表（使用用户端接口，普通用户可用）
 func GetAllDevices() ([]DeviceInfo, error) {
 	if err := cloud.EnsureConnected(); err != nil {
 		return nil, err
@@ -155,11 +155,11 @@ func GetAllDevices() ([]DeviceInfo, error) {
 	pageSize := 100
 
 	for {
-		req := &adminDeviceCtl.ListReq{
+		req := &userDeviceCtl.GetUserDeviceListReq{
 			PageNum:  pageNum,
 			PageSize: pageSize,
 		}
-		res, errPkg := cloud.Client.AdminDeviceCtl.List(req)
+		res, errPkg := cloud.Client.UserDeviceCtl.GetUserDeviceList(req)
 		if errPkg != nil {
 			return nil, fmt.Errorf("获取设备列表失败 (第 %d 页): %v", pageNum, errPkg)
 		}
@@ -169,13 +169,14 @@ func GetAllDevices() ([]DeviceInfo, error) {
 		}
 
 		for _, d := range res.Records {
+			di := d.DeviceInfo
 			devices = append(devices, DeviceInfo{
-				DeviceID: d.DeviceId,
-				UUID:     d.UUID,
-				Brand:    d.Brand,
-				Version:  d.Version,
-				IP:       d.Ip,
-				Online:   d.Online,
+				DeviceID: di.DeviceId,
+				UUID:     di.UUID,
+				Brand:    di.Brand,
+				Version:  di.Version,
+				IP:       di.Ip,
+				Online:   di.Online,
 			})
 		}
 
@@ -299,6 +300,7 @@ func (r *Runner) loadChangeOsParams() (*ChangeOsParams, error) {
 	return &params, nil
 }
 
+// filterOnlineDevices 过滤在线设备（用户端接口不支持 Online 过滤参数，本地遍历过滤）
 func (r *Runner) filterOnlineDevices(ids []int64) []int64 {
 	idMap := make(map[int64]bool)
 	for _, id := range ids {
@@ -308,20 +310,16 @@ func (r *Runner) filterOnlineDevices(ids []int64) []int64 {
 	foundOnline := make(map[int64]bool)
 	pageNum := 1
 	pageSize := 100
-	onlineVal := int8(1)
 
 	for {
-		req := &adminDeviceCtl.ListReq{
+		req := &userDeviceCtl.GetUserDeviceListReq{
 			PageNum:  pageNum,
 			PageSize: pageSize,
-			ListlistReq: adminDeviceCtl.ListlistReq{
-				Online: &onlineVal,
-			},
 		}
 
-		res, errPkg := cloud.Client.AdminDeviceCtl.List(req)
+		res, errPkg := cloud.Client.UserDeviceCtl.GetUserDeviceList(req)
 		if errPkg != nil {
-			r.logger("ERROR", "获取在线设备失败 (第 %d 页): %v", pageNum, errPkg)
+			r.logger("ERROR", "获取设备列表失败 (第 %d 页): %v", pageNum, errPkg)
 			break
 		}
 
@@ -330,8 +328,9 @@ func (r *Runner) filterOnlineDevices(ids []int64) []int64 {
 		}
 
 		for _, d := range res.Records {
-			if idMap[d.DeviceId] {
-				foundOnline[d.DeviceId] = true
+			di := d.DeviceInfo
+			if di.Online && idMap[di.DeviceId] {
+				foundOnline[di.DeviceId] = true
 			}
 		}
 
@@ -353,11 +352,11 @@ func (r *Runner) filterOnlineDevices(ids []int64) []int64 {
 }
 
 func (r *Runner) performChangeOs(deviceIDs []int64, params *ChangeOsParams) []TaskResult {
-	// 准备请求
-	var reqs []*adminChangeOsCtl.ChangeOsReq
+	// 准备请求（使用用户端 changeOsCtl 接口）
+	var reqs []*changeOsCtl.ChangeOsReq
 	for _, id := range deviceIDs {
 		dID := id
-		req := &adminChangeOsCtl.ChangeOsReq{
+		req := &changeOsCtl.ChangeOsReq{
 			DeviceId:     &dID,
 			Bs:           &params.Bs,
 			Category:     &params.Category,
@@ -396,7 +395,7 @@ func (r *Runner) performChangeOs(deviceIDs []int64, params *ChangeOsParams) []Ta
 				time.Sleep(2 * time.Second)
 			}
 
-			resList, errPkg := cloud.Client.AdminChangeOsCtl.ChangeOs(batchReqs)
+			resList, errPkg := cloud.Client.ChangeOsCtl.ChangeOs(batchReqs)
 			if errPkg == nil {
 				for _, res := range resList {
 					allResults = append(allResults, TaskResult{
@@ -463,11 +462,11 @@ func (r *Runner) pollStatus(tasks []TaskResult, round int) []TaskResult {
 			}
 			batchIDs := taskIDs[i:end]
 
-			statusReq := adminChangeOsCtl.GetChangeOsStatusReq{
+			statusReq := changeOsCtl.GetChangeOsStatusReq{
 				TbChangeOsIds: &batchIDs,
 			}
 
-			res, errPkg := cloud.Client.AdminChangeOsCtl.GetChangeOsStatus(statusReq)
+			res, errPkg := cloud.Client.ChangeOsCtl.GetChangeOsStatus(statusReq)
 			if errPkg != nil {
 				r.logger("ERROR", "获取状态失败: %v", errPkg)
 				continue
