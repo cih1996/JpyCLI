@@ -189,8 +189,9 @@ jpy
 | 标志 | 别名 | 类型 | 说明 | 示例 |
 |------|------|------|------|------|
 | `--group` | `-g` | string | 指定服务器分组名 | `-g production` |
-| `--server` | `-s` | string | 服务器地址模糊匹配（含该字符串） | `-s "192.168.1"` |
+| `--server` | `-s` | string | **中间件服务器**地址模糊匹配（含该字符串） | `-s "192.168.1"` |
 | `--uuid` | `-u` | string | 设备 UUID 模糊匹配 | `-u "ABCD1234"` |
+| `--ip` | — | string | **目标设备** IP 模糊匹配（中间件内的设备 IP） | `--ip "192.168.10.195"` |
 | `--seat` | — | int | 指定机位号（精确） | `--seat 5` |
 | `--authorized` | — | bool | 只操作已授权的服务器 | `--authorized` |
 | `--filter-online` | — | true/false | 按业务在线状态筛选 | `--filter-online true` |
@@ -202,6 +203,8 @@ jpy
 | `--interactive` | `-i` | bool | 进入 TUI 交互式选择模式 | `-i` |
 | `--output` | `-o` | string | 输出模式：tui / plain / json | `-o json` |
 
+> **`--server` vs `--ip` 区别**：`--server`（`-s`）匹配**中间件服务器**地址；`--ip` 匹配**目标设备**在中间件内的 IP——两者完全不同，勿混淆。
+>
 > **`--server` 是模糊匹配**：`-s "192.168"` 会匹配所有 URL 中含 `192.168` 的服务器。
 >
 > **查看任意命令的筛选标志**：`jpy middleware device <子命令> --help`
@@ -384,39 +387,48 @@ jpy middleware device adb --set off -s 192.168.1.201 --all
 
 向指定设备发送一条 shell 命令并返回执行结果。适用于不能使用 ADB 时，通过中间件下发指令。
 
+> **参数区分**：`--server` 指定**中间件服务器**地址（如 192.168.255.1），`--ip` 指定**目标设备**在中间件内的 IP（如 192.168.10.195），两者含义不同。
+
 ```bash
 # 查看参数
 jpy middleware device shell --help
 
+# 推荐写法：命令作为位置参数（更简洁）
+jpy middleware device shell "ls -lh" --server 192.168.255.1 --ip 192.168.10.195
+
 # 让设备重启到 fastboot 模式（刷机前置）
-jpy middleware device shell --server 192.168.255.1 --ip 192.168.10.195 --command "reboot bootloader"
+jpy middleware device shell "reboot bootloader" -s 192.168.255.1 --ip 192.168.10.195
 
 # 通过机位号定位（不需要知道设备 IP）
-jpy middleware device shell -s 192.168.255.1 --seat 3 -c "reboot bootloader"
+jpy middleware device shell "reboot bootloader" -s 192.168.255.1 --seat 3
 
 # 查询设备型号（JSON 输出）
-jpy middleware device shell -s 192.168.255.1 --ip 192.168.10.195 -c "getprop ro.product.model" -o json
+jpy middleware device shell "getprop ro.product.model" -s 192.168.255.1 --ip 192.168.10.195 -o json
+
+# 也可以用 --command / -c 传入命令（兼容旧写法）
+jpy middleware device shell -s 192.168.255.1 --ip 192.168.10.195 -c "getprop ro.product.model"
 ```
 
 **标志说明**：
 
 | 标志 | 别名 | 必填 | 说明 |
 |------|------|------|------|
-| `--server` | `-s` | ✅ | 中间件服务器 IP 或关键词 |
-| `--ip` | — | 二选一 | 目标设备 IP（查设备列表可知） |
-| `--seat` | — | 二选一 | 设备机位号 |
-| `--command` | `-c` | ✅ | 要执行的 shell 命令 |
+| `--server` | `-s` | ✅ | **中间件服务器**地址（IP 或 URL 关键词） |
+| `--ip` | — | 二选一 | **目标设备** IP（中间件内的设备 IP，非服务器 IP） |
+| `--seat` | — | 二选一 | 设备机位号（与 `--ip` 二选一） |
+| `[command]` | — | ✅ | 要执行的 shell 命令（位置参数，推荐） |
+| `--command` | `-c` | ✅ | 要执行的 shell 命令（与位置参数等效） |
 | `--output` | `-o` | — | plain（默认）/ json |
 
-> **注意**：`--ip` 和 `--seat` 二选一，`--server` 和 `--command` 必填。
+> **执行通道**：工具自动选择最兼容的通道：f=14（设备连接，老/新系统）→ f=289（新系统）→ Terminal（兜底，无返回值）。老系统无需额外配置，自动适配。
 
 **JSON 输出结构**：
 ```json
 {
   "server": "192.168.255.1:443",
   "seat": 3,
-  "command": "reboot bootloader",
-  "output": "",
+  "command": "ls -lh",
+  "output": "total 84K\n...",
   "exit_code": 0,
   "success": true
 }
@@ -591,12 +603,12 @@ jpy middleware device reboot --filter-has-ip false --all -o json
 # 1. 查看目标服务器的设备列表，确认目标设备 IP
 jpy middleware device list -s 192.168.255.1 --filter-online true -o json
 
-# 2. 通过 IP 让设备进入 fastboot
-jpy middleware device shell -s 192.168.255.1 --ip 192.168.10.195 -c "reboot bootloader"
+# 2. 通过 IP 让设备进入 fastboot（命令作位置参数，更简洁）
+jpy middleware device shell "reboot bootloader" -s 192.168.255.1 --ip 192.168.10.195
 
 # 3. 或批量通过机位号操作
-jpy middleware device shell -s 192.168.255.1 --seat 1 -c "reboot bootloader"
-jpy middleware device shell -s 192.168.255.1 --seat 2 -c "reboot bootloader"
+jpy middleware device shell "reboot bootloader" -s 192.168.255.1 --seat 1
+jpy middleware device shell "reboot bootloader" -s 192.168.255.1 --seat 2
 ```
 
 ### 场景 D：AI/自动化远程管控（JSON 模式）
@@ -613,7 +625,7 @@ jpy middleware device reboot --filter-has-ip false --all -o json
 # 退出码: 0=全部成功, 1=部分失败, 2=全部失败
 
 # 查询指定设备属性
-jpy middleware device shell -s 192.168.255.1 --ip 192.168.10.195 -c "getprop ro.build.version.release" -o json
+jpy middleware device shell "getprop ro.build.version.release" -s 192.168.255.1 --ip 192.168.10.195 -o json
 ```
 
 ### 场景 E：设备导出与 DHCP 配置

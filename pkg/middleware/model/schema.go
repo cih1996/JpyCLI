@@ -14,7 +14,10 @@ const (
 	// Terminal
 	FuncTerminalInit = 9
 
-	// Shell Command (Guard)
+	// Shell Command via Device Connection (f=14，老系统兼容，通过 /box/guard?id=<seat> 发送)
+	FuncBatchCommand = 14
+
+	// Shell Command (Guard, f=289，新系统，通过管理连接发送，data 含 seat+shell)
 	FuncCMDWithResult = 289 // 向设备发送 shell 命令并返回输出
 
 	// Device Control (Mirror)

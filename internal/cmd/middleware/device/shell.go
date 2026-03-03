@@ -25,34 +25,57 @@ func NewShellCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "shell",
-		Short: "向设备发送 shell 命令",
+		Use:   "shell [command]",
+		Short: "向设备发送 shell 命令（支持老系统）",
 		Long: `通过中间件向指定设备发送 shell 命令并返回输出。
 
+命令可作为位置参数（推荐），或通过 --command/-c 传入：
+  jpy middleware device shell "ls -lh" --server 192.168.255.1 --ip 192.168.10.195
+  jpy middleware device shell -s 192.168.255.1 --ip 192.168.10.195 -c "ls -lh"
+
+参数说明：
+  --server / -s   中间件服务器地址（IP 或 URL 关键词），指定与哪台中间件通信
+  --ip            目标设备在中间件内的 IP（非中间件服务器 IP）
+  --seat          目标设备机位号（与 --ip 二选一）
+
+执行通道（自动选择，逐级降级）：
+  1. f=14  设备连接通道（老/新系统通用，有返回值）
+  2. f=289 Guard 管理通道（新系统，有返回值，老系统返回 code 10 自动降级）
+  3. Terminal 通道（老系统兜底，无结构化返回值）
+
 示例:
+  # 查看设备文件列表（命令作位置参数）
+  jpy middleware device shell "ls -lh" --server 192.168.255.1 --ip 192.168.10.195
+
   # 让设备重启到 fastboot 模式
-  jpy middleware device shell --server 192.168.255.1 --ip 192.168.10.195 --command "reboot bootloader"
+  jpy middleware device shell "reboot bootloader" -s 192.168.255.1 --ip 192.168.10.195
 
-  # JSON 输出（AI/脚本解析）
-  jpy middleware device shell --server 192.168.255.1 --ip 192.168.10.195 -c "getprop ro.product.model" -o json
+  # JSON 输出（适合脚本解析）
+  jpy middleware device shell "getprop ro.product.model" -s 192.168.255.1 --ip 192.168.10.195 -o json
 
-  # 直接通过机位号定位设备
-  jpy middleware device shell --server 192.168.255.1 --seat 3 -c "reboot bootloader"
+  # 通过机位号定位设备
+  jpy middleware device shell "reboot bootloader" -s 192.168.255.1 --seat 3
 
 输出模式:
   --output plain   纯文本（默认），直接输出命令结果
   --output json    JSON 格式，包含 server/seat/command/output/exit_code
   --output tui     同 plain`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// 位置参数优先，其次 --command/-c
+			if len(args) > 0 && command == "" {
+				command = args[0]
+			}
+
 			// 参数校验
 			if serverPattern == "" {
-				return fmt.Errorf("必须指定 --server 参数（中间件服务器地址）")
+				return fmt.Errorf("必须指定 --server / -s 参数（中间件服务器地址）")
 			}
 			if command == "" {
-				return fmt.Errorf("必须指定 --command（或 -c）参数")
+				return fmt.Errorf("必须指定要执行的命令（位置参数或 --command / -c）")
 			}
 			if deviceIP == "" && seat < 0 {
-				return fmt.Errorf("必须指定 --ip（设备IP）或 --seat（机位号）之一")
+				return fmt.Errorf("必须指定 --ip（目标设备 IP）或 --seat（机位号）之一")
 			}
 
 			// 1. 加载配置
@@ -67,13 +90,12 @@ func NewShellCmd() *cobra.Command {
 				return fmt.Errorf("未找到匹配的服务器: %s（请先通过 middleware auth login 添加）", serverPattern)
 			}
 
-			// 3. 连接 Guard WebSocket
+			// 3. 连接 Guard WebSocket（用于获取设备列表）
 			connSvc := connector.NewConnectorService(cfg)
 			ws, err := connSvc.ConnectGuard(serverCfg)
 			if err != nil {
 				return fmt.Errorf("连接服务器 %s 失败: %v", serverCfg.URL, err)
 			}
-			defer ws.Close()
 
 			deviceAPI := api.NewDeviceAPI(ws, serverCfg.URL, serverCfg.Token)
 
@@ -82,6 +104,7 @@ func NewShellCmd() *cobra.Command {
 			if deviceIP != "" {
 				statuses, err := deviceAPI.FetchOnlineStatus()
 				if err != nil {
+					ws.Close()
 					return fmt.Errorf("获取设备在线状态失败: %v", err)
 				}
 				matched := false
@@ -93,17 +116,36 @@ func NewShellCmd() *cobra.Command {
 					}
 				}
 				if !matched {
+					ws.Close()
 					return fmt.Errorf("在服务器 %s 上未找到 IP 为 %s 的设备", serverCfg.URL, deviceIP)
 				}
 			}
+			ws.Close() // 关闭查询连接，后续执行使用独立连接
 
-			// 5. 执行 shell 命令
 			if output != "json" {
 				fmt.Fprintf(os.Stderr, "[%s] 机位 %d 执行: %s\n", serverCfg.URL, targetSeat, command)
 			}
-			result, err := deviceAPI.ExecuteShell(targetSeat, command)
+
+			// 5. 优先尝试 f=14（设备连接通道，老/新系统通用）
+			result, err := shellExecViaF14(connSvc, serverCfg, targetSeat, command)
+			if err == nil {
+				return shellOutputResult(result, serverCfg.URL, targetSeat, command, output)
+			}
+			if output != "json" {
+				fmt.Fprintf(os.Stderr, "⚠️  f=14 通道失败（%v），降级到 f=289...\n", err)
+			}
+
+			// 6. 降级到 f=289（Guard 管理通道，新系统）
+			ws2, err2 := connSvc.ConnectGuard(serverCfg)
+			if err2 != nil {
+				return fmt.Errorf("连接服务器 %s 失败: %v", serverCfg.URL, err2)
+			}
+			defer ws2.Close()
+			deviceAPI2 := api.NewDeviceAPI(ws2, serverCfg.URL, serverCfg.Token)
+
+			result, err = deviceAPI2.ExecuteShell(targetSeat, command)
 			if err != nil {
-				// code 10 = 老系统不支持该功能（unsupported function），自动降级到 Terminal 通道
+				// code 10 = 老系统不支持（f=289），自动降级到 Terminal 通道
 				if strings.Contains(err.Error(), "code 10") {
 					return shellExecViaTerminal(connSvc, serverCfg, targetSeat, command, output)
 				}
@@ -128,14 +170,13 @@ func NewShellCmd() *cobra.Command {
 				return fmt.Errorf("执行命令失败: %v", err)
 			}
 
-			// 6. 输出结果
 			return shellOutputResult(result, serverCfg.URL, targetSeat, command, output)
 		},
 	}
 
 	cmd.Flags().StringVarP(&serverPattern, "server", "s", "", "中间件服务器地址（IP 或 URL 关键词，必填）")
 	cmd.Flags().StringVar(&deviceIP, "ip", "", "目标设备 IP 地址（与 --seat 二选一）")
-	cmd.Flags().StringVarP(&command, "command", "c", "", "要执行的 shell 命令（必填）")
+	cmd.Flags().StringVarP(&command, "command", "c", "", "要执行的 shell 命令（可用位置参数代替）")
 	cmd.Flags().StringVarP(&output, "output", "o", "plain", "输出模式: plain/json/tui")
 	cmd.Flags().IntVar(&seat, "seat", -1, "设备机位号（与 --ip 二选一）")
 
@@ -157,12 +198,46 @@ func shellFindServer(cfg *config.Config, pattern string) (config.LocalServerConf
 	return config.LocalServerConfig{}, false
 }
 
+// shellExecViaF14 通过 f=14（FuncBatchCommand）在设备专用连接上执行 shell 命令。
+// 连接方式：/box/guard?id=<seat>，data 字段为命令字符串，无需在消息中指定 seat。
+// 老系统和新系统均支持此接口，是首选执行通道。
+func shellExecViaF14(connSvc *connector.ConnectorService, serverCfg config.LocalServerConfig, seat int, command string) (*model.ShellResult, error) {
+	ws, err := connSvc.ConnectDeviceTerminal(serverCfg, int64(seat))
+	if err != nil {
+		return nil, fmt.Errorf("f=14 设备连接失败: %v", err)
+	}
+	defer ws.Close()
+
+	resp, err := ws.SendRequest(model.FuncBatchCommand, command)
+	if err != nil {
+		return nil, fmt.Errorf("f=14 发送失败: %v", err)
+	}
+	if resp.Code != nil && *resp.Code != 0 {
+		msg := "unknown"
+		if resp.Msg != nil {
+			msg = *resp.Msg
+		}
+		return nil, fmt.Errorf("f=14 执行失败 (code %d): %s", *resp.Code, msg)
+	}
+
+	// data 字段是 shell 输出字符串
+	output := ""
+	switch v := resp.Data.(type) {
+	case string:
+		output = v
+	case []byte:
+		output = string(v)
+	}
+
+	return &model.ShellResult{Output: output}, nil
+}
+
 // shellExecViaTerminal 通过 Terminal 通道发送 shell 命令（老系统兼容降级方案）。
 // 老系统不支持 f=289（FuncCMDWithResult，code 10），但支持 f=9（Terminal Init）。
 // Terminal 模式无法获取命令返回值，适合 reboot bootloader 等"发送即可"的指令。
 func shellExecViaTerminal(connSvc *connector.ConnectorService, serverCfg config.LocalServerConfig, seat int, command, outputMode string) error {
 	if outputMode != "json" {
-		fmt.Fprintf(os.Stderr, "⚠️  老系统不支持 shell API (code 10)，切换到 Terminal 通道...\n")
+		fmt.Fprintf(os.Stderr, "⚠️  降级到 Terminal 通道（无返回值）...\n")
 	}
 
 	// 建立 Terminal 专用连接（Guard endpoint，id=seat）
