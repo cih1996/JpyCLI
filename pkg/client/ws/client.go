@@ -177,6 +177,12 @@ func (c *Client) readLoop() {
 }
 
 func (c *Client) SendRequest(f int, data interface{}) (*model.WSResponse, error) {
+	return c.SendRequestToDevice(f, data, 0)
+}
+
+// SendRequestToDevice 发送请求并在协议 header 的 deviceIds 中指定目标设备 ID。
+// deviceID=0 表示广播（与 SendRequest 等价）；非零值用于 f=14 等需要指定设备的接口。
+func (c *Client) SendRequestToDevice(f int, data interface{}, deviceID uint64) (*model.WSResponse, error) {
 	if c.Conn == nil {
 		return nil, errors.New("未连接")
 	}
@@ -189,7 +195,7 @@ func (c *Client) SendRequest(f int, data interface{}) (*model.WSResponse, error)
 		Data: data,
 	}
 
-	encoded, err := protocol.Encode(req, protocol.TypeMsgpack, []uint64{0})
+	encoded, err := protocol.Encode(req, protocol.TypeMsgpack, []uint64{deviceID})
 	if err != nil {
 		return nil, err
 	}

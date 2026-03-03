@@ -6,6 +6,7 @@ import (
 	"jpy-cli/pkg/config"
 	"jpy-cli/pkg/middleware/connector"
 	"jpy-cli/pkg/middleware/device/api"
+	"jpy-cli/pkg/middleware/device/selector"
 	"jpy-cli/pkg/middleware/device/terminal"
 	"jpy-cli/pkg/middleware/model"
 	"os"
@@ -90,37 +91,48 @@ func NewShellCmd() *cobra.Command {
 				return fmt.Errorf("未找到匹配的服务器: %s（请先通过 middleware auth login 添加）", serverPattern)
 			}
 
-			// 3. 连接 Guard WebSocket（用于获取设备列表）
+			// 3. 连接服务，准备后续执行
 			connSvc := connector.NewConnectorService(cfg)
-			ws, err := connSvc.ConnectGuard(serverCfg)
-			if err != nil {
-				return fmt.Errorf("连接服务器 %s 失败: %v", serverCfg.URL, err)
-			}
 
-			deviceAPI := api.NewDeviceAPI(ws, serverCfg.URL, serverCfg.Token)
-
-			// 4. 通过 IP 查找机位号（如果未直接提供 --seat）
+			// 4. 通过 IP 查找机位号（复用 selector，与 device list 同一数据源）
 			targetSeat := seat
 			if deviceIP != "" {
-				statuses, err := deviceAPI.FetchOnlineStatus()
+				if output != "json" {
+					fmt.Fprintf(os.Stderr, "正在查询设备 IP %s 对应的机位号...\n", deviceIP)
+				}
+				selOpts := selector.SelectionOptions{
+					ServerPattern: serverPattern,
+					Silent:        true,
+					Seat:          -1, // -1 表示不过滤机位号
+				}
+				allDevices, err := selector.SelectDevices(selOpts)
 				if err != nil {
-					ws.Close()
-					return fmt.Errorf("获取设备在线状态失败: %v", err)
+					return fmt.Errorf("获取设备列表失败: %v", err)
 				}
 				matched := false
-				for _, s := range statuses {
-					if s.IP == deviceIP {
-						targetSeat = s.Seat
+				for _, d := range allDevices {
+					if strings.Contains(d.IP, deviceIP) {
+						targetSeat = d.Seat
 						matched = true
 						break
 					}
 				}
 				if !matched {
-					ws.Close()
-					return fmt.Errorf("在服务器 %s 上未找到 IP 为 %s 的设备", serverCfg.URL, deviceIP)
+					// 列出所有可用设备 IP，帮助用户确认正确地址
+					var available []string
+					for _, d := range allDevices {
+						if d.IP != "" {
+							available = append(available, fmt.Sprintf("seat=%d ip=%s", d.Seat, d.IP))
+						}
+					}
+					if len(available) > 0 {
+						return fmt.Errorf("在服务器 %s 上未找到 IP 为 %s 的设备\n可用设备列表:\n  %s",
+							serverCfg.URL, deviceIP, strings.Join(available, "\n  "))
+					}
+					return fmt.Errorf("在服务器 %s 上未找到 IP 为 %s 的设备（设备列表为空，请先确认设备在线）",
+						serverCfg.URL, deviceIP)
 				}
 			}
-			ws.Close() // 关闭查询连接，后续执行使用独立连接
 
 			if output != "json" {
 				fmt.Fprintf(os.Stderr, "[%s] 机位 %d 执行: %s\n", serverCfg.URL, targetSeat, command)
@@ -198,17 +210,18 @@ func shellFindServer(cfg *config.Config, pattern string) (config.LocalServerConf
 	return config.LocalServerConfig{}, false
 }
 
-// shellExecViaF14 通过 f=14（FuncBatchCommand）在设备专用连接上执行 shell 命令。
-// 连接方式：/box/guard?id=<seat>，data 字段为命令字符串，无需在消息中指定 seat。
-// 老系统和新系统均支持此接口，是首选执行通道。
+// shellExecViaF14 通过 f=14（FuncBatchCommand）向指定设备发送 shell 命令并获取输出。
+// 连接方式：/box/guard?id=0（主 Guard 连接），协议 header 的 deviceIds 字段写入 seat 号，
+// 这与切换 OTG/HUB 使用的是同一条 WebSocket 连接和协议层。
 func shellExecViaF14(connSvc *connector.ConnectorService, serverCfg config.LocalServerConfig, seat int, command string) (*model.ShellResult, error) {
-	ws, err := connSvc.ConnectDeviceTerminal(serverCfg, int64(seat))
+	ws, err := connSvc.ConnectGuard(serverCfg)
 	if err != nil {
-		return nil, fmt.Errorf("f=14 设备连接失败: %v", err)
+		return nil, fmt.Errorf("f=14 Guard 连接失败: %v", err)
 	}
 	defer ws.Close()
 
-	resp, err := ws.SendRequest(model.FuncBatchCommand, command)
+	// deviceIds header 写入 seat，data 字段是命令字符串
+	resp, err := ws.SendRequestToDevice(model.FuncBatchCommand, command, uint64(seat))
 	if err != nil {
 		return nil, fmt.Errorf("f=14 发送失败: %v", err)
 	}
@@ -232,12 +245,12 @@ func shellExecViaF14(connSvc *connector.ConnectorService, serverCfg config.Local
 	return &model.ShellResult{Output: output}, nil
 }
 
-// shellExecViaTerminal 通过 Terminal 通道发送 shell 命令（老系统兼容降级方案）。
-// 老系统不支持 f=289（FuncCMDWithResult，code 10），但支持 f=9（Terminal Init）。
-// Terminal 模式无法获取命令返回值，适合 reboot bootloader 等"发送即可"的指令。
+// shellExecViaTerminal 通过 Terminal 通道执行 shell 命令并收集输出（老系统兼容）。
+// 老系统不支持 f=14/f=289，但支持 f=9（Terminal Init）。
+// Terminal 输出为 VT100 格式，本函数会等待命令完成并清理 ANSI 转义码。
 func shellExecViaTerminal(connSvc *connector.ConnectorService, serverCfg config.LocalServerConfig, seat int, command, outputMode string) error {
 	if outputMode != "json" {
-		fmt.Fprintf(os.Stderr, "⚠️  降级到 Terminal 通道（无返回值）...\n")
+		fmt.Fprintf(os.Stderr, "⚠️  降级到 Terminal 通道（VT100 模式）...\n")
 	}
 
 	// 建立 Terminal 专用连接（Guard endpoint，id=seat）
@@ -254,20 +267,57 @@ func shellExecViaTerminal(connSvc *connector.ConnectorService, serverCfg config.
 		return fmt.Errorf("Terminal 初始化失败: %v", err)
 	}
 
-	// 等待 shell 就绪（出现 $ 或 # 提示符），超时后仍尝试发送
+	// 等待 shell 就绪（出现 $ 或 # 提示符）
 	if err := term.WaitForReady(8 * time.Second); err != nil {
 		if outputMode != "json" {
 			fmt.Fprintf(os.Stderr, "⚠️  等待 Terminal 就绪超时，仍然尝试发送命令...\n")
 		}
 	}
 
-	// 发送命令（Terminal 模式无结构化返回值）
+	// 排空就绪前积累的输出
+	for {
+		select {
+		case <-term.Output:
+		default:
+			goto Flushed
+		}
+	}
+Flushed:
+
+	// 发送命令
 	if err := term.Exec(command); err != nil {
 		return fmt.Errorf("Terminal 发送命令失败: %v", err)
 	}
 
-	// 等待一小段时间确保命令已写入（reboot 类命令会立即断连）
-	time.Sleep(500 * time.Millisecond)
+	// 收集命令输出，直到再次看到提示符（$ / #）或超时（15s）
+	var buf strings.Builder
+	deadline := time.After(15 * time.Second)
+	lastChunk := time.Now()
+	for {
+		select {
+		case chunk := <-term.Output:
+			buf.WriteString(chunk)
+			lastChunk = time.Now()
+			// 检测提示符出现表示命令已执行完毕
+			cleaned := termStripANSI(buf.String())
+			if termHasPrompt(cleaned) {
+				goto CollectDone
+			}
+		case <-deadline:
+			goto CollectDone
+		default:
+			// 无新数据且距上次收到数据超过 1.5s，认为命令完成
+			if time.Since(lastChunk) > 1500*time.Millisecond && buf.Len() > 0 {
+				goto CollectDone
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+CollectDone:
+
+	rawOutput := termStripANSI(buf.String())
+	// 去掉命令回显和最后一行提示符
+	rawOutput = termStripEcho(rawOutput, command)
 
 	switch outputMode {
 	case "json":
@@ -279,20 +329,96 @@ func shellExecViaTerminal(connSvc *connector.ConnectorService, serverCfg config.
 			Success bool   `json:"success"`
 			Note    string `json:"note"`
 		}
+		note := ""
+		if rawOutput == "" {
+			note = "Terminal 通道：命令已发送，无输出或输出超时"
+		}
 		b, _ := json.Marshal(shellJSON{
 			Server:  serverCfg.URL,
 			Seat:    seat,
 			Command: command,
-			Output:  "",
+			Output:  rawOutput,
 			Success: true,
-			Note:    "老系统兼容模式：通过 Terminal 通道发送，无返回值",
+			Note:    note,
 		})
 		fmt.Println(string(b))
 	default:
-		fmt.Fprintf(os.Stderr, "✓ 命令已通过 Terminal 通道发送（老系统兼容，无返回值）\n")
+		if rawOutput != "" {
+			fmt.Print(rawOutput)
+			if len(rawOutput) > 0 && rawOutput[len(rawOutput)-1] != '\n' {
+				fmt.Println()
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "✓ 命令已发送（Terminal 通道，无可解析输出）\n")
+		}
 	}
 
 	return nil
+}
+
+// termStripANSI 去除 VT100/ANSI 转义序列（\x1b[...m 及 \r 等）
+func termStripANSI(s string) string {
+	var out strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			// 跳过 ESC [ ... 直到遇到字母
+			i += 2
+			for i < len(s) && (s[i] < 'A' || s[i] > 'Z') && (s[i] < 'a' || s[i] > 'z') {
+				i++
+			}
+			if i < len(s) {
+				i++ // 跳过终止字母
+			}
+		} else if s[i] == '\r' {
+			i++
+		} else {
+			out.WriteByte(s[i])
+			i++
+		}
+	}
+	return out.String()
+}
+
+// termHasPrompt 检测字符串末尾是否出现 shell 提示符（$ 或 #）
+func termHasPrompt(s string) bool {
+	// 找最后一行非空内容
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		// 末尾是 $ 或 # 认为是提示符
+		if strings.HasSuffix(line, "$") || strings.HasSuffix(line, "#") ||
+			strings.Contains(line, "$ ") || strings.Contains(line, "# ") {
+			return true
+		}
+		break
+	}
+	return false
+}
+
+// termStripEcho 去除命令回显行和最后的 shell 提示符行
+func termStripEcho(output, command string) string {
+	lines := strings.Split(output, "\n")
+	var result []string
+	echoSkipped := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// 跳过命令回显行
+		if !echoSkipped && strings.Contains(line, command) {
+			echoSkipped = true
+			continue
+		}
+		// 跳过末尾提示符行
+		if termHasPrompt(trimmed) && trimmed != "" {
+			continue
+		}
+		result = append(result, line)
+	}
+	// 去除头尾空行
+	return strings.TrimSpace(strings.Join(result, "\n"))
 }
 
 // shellOutputResult 输出 shell 执行结果
