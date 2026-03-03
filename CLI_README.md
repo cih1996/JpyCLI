@@ -235,18 +235,49 @@ jpy middleware device adb --set off -s 192.168.1.201 --all       # One server
 
 ### 5.7 `device shell` — Send Shell Command
 
+Send a shell command to a specific device and return its output. Works without ADB.
+
+> **Parameter distinction**: `--server` (`-s`) matches the **middleware server** address; `--ip` matches the **target device IP** inside the middleware — these are completely different.
+
 ```bash
+# Recommended: command as positional argument (concise)
+jpy middleware device shell "ls -lh" --server 192.168.255.1 --ip 192.168.10.195
+
 # Reboot to fastboot (pre-flash, no ADB required)
-jpy middleware device shell --server 192.168.255.1 --ip 192.168.10.195 --command "reboot bootloader"
+jpy middleware device shell "reboot bootloader" -s 192.168.255.1 --ip 192.168.10.195
 
-# By seat number
-jpy middleware device shell -s 192.168.255.1 --seat 3 -c "reboot bootloader"
+# By seat number (no IP needed)
+jpy middleware device shell "reboot bootloader" -s 192.168.255.1 --seat 3
 
-# Query device info (JSON)
-jpy middleware device shell -s 192.168.255.1 --ip 192.168.10.195 -c "getprop ro.product.model" -o json
+# Query device info (JSON output)
+jpy middleware device shell "getprop ro.product.model" -s 192.168.255.1 --ip 192.168.10.195 -o json
+
+# Also supported: --command / -c flag (legacy style)
+jpy middleware device shell -s 192.168.255.1 --ip 192.168.10.195 -c "getprop ro.product.model"
 ```
 
-Required: `--server` + `--command`. Target: `--ip` OR `--seat`.
+| Flag | Alias | Required | Description |
+|------|-------|----------|-------------|
+| `--server` | `-s` | ✅ | **Middleware server** address (fuzzy match) |
+| `--ip` | — | One of | **Target device IP** inside the middleware |
+| `--seat` | — | One of | Device seat number (alternative to `--ip`) |
+| `[command]` | — | ✅ | Shell command to run (positional, recommended) |
+| `--command` | `-c` | ✅ | Shell command (alternative to positional arg) |
+| `--output` | `-o` | — | `plain` (default) / `json` |
+
+> **Execution channel**: auto-selects: f=14 (main Guard, compatible) → f=289 (new systems) → Terminal (fallback). No manual configuration needed.
+
+**JSON output**:
+```json
+{
+  "server": "192.168.255.1:443",
+  "seat": 3,
+  "command": "ls -lh",
+  "output": "total 84K\n...",
+  "exit_code": 0,
+  "success": true
+}
+```
 
 ### 5.8 `device export` — Export Device Info
 

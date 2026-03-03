@@ -20,6 +20,7 @@ type SelectionOptions struct {
 	Group          string
 	ServerPattern  string
 	UUID           string
+	IP             string
 	Seat           int // -1 for any
 	ADB            *bool
 	USB            *bool
@@ -174,6 +175,11 @@ func SelectDevices(opts SelectionOptions) ([]model.DeviceInfo, error) {
 	for _, d := range allDevices {
 		// UUID Filter (Fuzzy)
 		if opts.UUID != "" && !strings.Contains(d.UUID, opts.UUID) {
+			continue
+		}
+		// IP Filter (Exact match or substring?) - Let's use substring for convenience or exact if needed.
+		// Usually IP is exact, but substring is handy. Let's use Contains for now.
+		if opts.IP != "" && !strings.Contains(d.IP, opts.IP) {
 			continue
 		}
 		// Seat Filter

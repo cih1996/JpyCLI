@@ -51,7 +51,7 @@ jpy middleware device list --filter-uuid false
 设备控制
 
 #将无SN的设备切换到USB模式
-jpy middleware device usb --mode usb --filter-uuid false
+jpy middleware device usb --mode device --filter-uuid false
 
 #将无SN的设备切换到OTG模式
 jpy middleware device usb --mode host --filter-uuid false
@@ -60,7 +60,7 @@ jpy middleware device usb --mode host --filter-uuid false
 jpy middleware device reboot --filter-uuid false
 
 #将无IP的设备切换到USB模式
-jpy middleware device usb --mode usb --filter-has-ip false
+jpy middleware device usb --mode device --filter-has-ip false
 
 #将无IP的设备切换到OTG模式
 jpy middleware device usb --mode host --filter-has-ip false

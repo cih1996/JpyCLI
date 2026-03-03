@@ -11,6 +11,7 @@ type CommonFlags struct {
 	Group         string
 	ServerPattern string
 	UUID          string
+	IP            string
 	Seat          int
 
 	// 筛选器
@@ -32,6 +33,7 @@ func AddCommonFlags(cmd *cobra.Command, opts *CommonFlags) {
 	cmd.Flags().StringVarP(&opts.Group, "group", "g", "", "目标服务器分组")
 	cmd.Flags().StringVarP(&opts.ServerPattern, "server", "s", "", "服务器地址匹配模式 (例如: 192.168.1)")
 	cmd.Flags().StringVarP(&opts.UUID, "uuid", "u", "", "设备UUID (模糊匹配)")
+	cmd.Flags().StringVar(&opts.IP, "ip", "", "设备IP (模糊匹配)")
 	cmd.Flags().IntVar(&opts.Seat, "seat", -1, "机位号")
 
 	cmd.Flags().StringVar(&opts.FilterADB, "filter-adb", "", "筛选ADB状态 (true/false)")
@@ -55,6 +57,7 @@ func (opts *CommonFlags) ToSelectorOptions() (selector.SelectionOptions, error) 
 		Group:         opts.Group,
 		ServerPattern: opts.ServerPattern,
 		UUID:          opts.UUID,
+		IP:            opts.IP,
 		Seat:          opts.Seat,
 		Interactive:   opts.Interactive,
 	}

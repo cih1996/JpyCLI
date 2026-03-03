@@ -279,9 +279,10 @@ func shouldEnterInteractive(cmd *cobra.Command, opts *CommonFlags) bool {
 	}
 
 	filterFlags := []string{
-		"group", "server", "uuid", "seat",
+		"group", "server", "uuid", "seat", "ip",
 		"filter-adb", "filter-usb", "filter-online", "filter-has-ip",
 		"authorized",
+		"set", "mode", // Allow action flags to trigger non-interactive mode
 	}
 
 	for _, name := range filterFlags {

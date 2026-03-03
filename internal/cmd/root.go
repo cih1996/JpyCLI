@@ -9,6 +9,7 @@ import (
 	"jpy-cli/internal/cmd/middleware"
 	"jpy-cli/internal/cmd/proxy"
 	"jpy-cli/internal/cmd/server"
+	"jpy-cli/internal/cmd/test"
 	"jpy-cli/internal/cmd/tools"
 	"jpy-cli/pkg/config"
 	"jpy-cli/pkg/logger"
@@ -157,6 +158,9 @@ func Execute() {
 
 	// Tools commands
 	rootCmd.AddCommand(tools.NewToolsCmd())
+
+	// Test commands
+	rootCmd.AddCommand(test.NewTestCmd())
 
 	// Server Commands
 	serverCmd := &cobra.Command{
