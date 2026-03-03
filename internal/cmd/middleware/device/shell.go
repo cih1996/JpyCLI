@@ -6,9 +6,11 @@ import (
 	"jpy-cli/pkg/config"
 	"jpy-cli/pkg/middleware/connector"
 	"jpy-cli/pkg/middleware/device/api"
+	"jpy-cli/pkg/middleware/device/terminal"
 	"jpy-cli/pkg/middleware/model"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -101,6 +103,10 @@ func NewShellCmd() *cobra.Command {
 			}
 			result, err := deviceAPI.ExecuteShell(targetSeat, command)
 			if err != nil {
+				// code 10 = 老系统不支持该功能（unsupported function），自动降级到 Terminal 通道
+				if strings.Contains(err.Error(), "code 10") {
+					return shellExecViaTerminal(connSvc, serverCfg, targetSeat, command, output)
+				}
 				if output == "json" {
 					type errOut struct {
 						Server  string `json:"server"`
@@ -149,6 +155,69 @@ func shellFindServer(cfg *config.Config, pattern string) (config.LocalServerConf
 		}
 	}
 	return config.LocalServerConfig{}, false
+}
+
+// shellExecViaTerminal 通过 Terminal 通道发送 shell 命令（老系统兼容降级方案）。
+// 老系统不支持 f=289（FuncCMDWithResult，code 10），但支持 f=9（Terminal Init）。
+// Terminal 模式无法获取命令返回值，适合 reboot bootloader 等"发送即可"的指令。
+func shellExecViaTerminal(connSvc *connector.ConnectorService, serverCfg config.LocalServerConfig, seat int, command, outputMode string) error {
+	if outputMode != "json" {
+		fmt.Fprintf(os.Stderr, "⚠️  老系统不支持 shell API (code 10)，切换到 Terminal 通道...\n")
+	}
+
+	// 建立 Terminal 专用连接（Guard endpoint，id=seat）
+	ws, err := connSvc.ConnectDeviceTerminal(serverCfg, int64(seat))
+	if err != nil {
+		return fmt.Errorf("Terminal 通道连接失败: %v", err)
+	}
+	defer ws.Close()
+
+	term := terminal.NewTerminalSession(ws, int64(seat))
+
+	// 初始化 Terminal（发送 f=9 握手）
+	if err := term.Init(); err != nil {
+		return fmt.Errorf("Terminal 初始化失败: %v", err)
+	}
+
+	// 等待 shell 就绪（出现 $ 或 # 提示符），超时后仍尝试发送
+	if err := term.WaitForReady(8 * time.Second); err != nil {
+		if outputMode != "json" {
+			fmt.Fprintf(os.Stderr, "⚠️  等待 Terminal 就绪超时，仍然尝试发送命令...\n")
+		}
+	}
+
+	// 发送命令（Terminal 模式无结构化返回值）
+	if err := term.Exec(command); err != nil {
+		return fmt.Errorf("Terminal 发送命令失败: %v", err)
+	}
+
+	// 等待一小段时间确保命令已写入（reboot 类命令会立即断连）
+	time.Sleep(500 * time.Millisecond)
+
+	switch outputMode {
+	case "json":
+		type shellJSON struct {
+			Server  string `json:"server"`
+			Seat    int    `json:"seat"`
+			Command string `json:"command"`
+			Output  string `json:"output"`
+			Success bool   `json:"success"`
+			Note    string `json:"note"`
+		}
+		b, _ := json.Marshal(shellJSON{
+			Server:  serverCfg.URL,
+			Seat:    seat,
+			Command: command,
+			Output:  "",
+			Success: true,
+			Note:    "老系统兼容模式：通过 Terminal 通道发送，无返回值",
+		})
+		fmt.Println(string(b))
+	default:
+		fmt.Fprintf(os.Stderr, "✓ 命令已通过 Terminal 通道发送（老系统兼容，无返回值）\n")
+	}
+
+	return nil
 }
 
 // shellOutputResult 输出 shell 执行结果
