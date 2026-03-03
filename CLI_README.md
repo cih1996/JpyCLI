@@ -1,364 +1,303 @@
-# JPY CLI Command Reference
+# JPY CLI Reference Manual
 
-A CLI tool for JPY middleware server management and device control, supporting both local LAN middleware and remote Cloud Platform APIs.
+> One command controls all devices across multiple middleware servers. Add filters to narrow down to a single device on a single seat.
 
-## Command Tree
+---
+
+## Table of Contents
+
+1. [Core Concept: Cluster Control](#1-core-concept-cluster-control)
+2. [Self-Help Discovery with --help](#2-self-help-discovery-with---help)
+3. [Control Granularity: Global to Single Device](#3-control-granularity-global-to-single-device)
+4. [Command Tree](#4-command-tree)
+5. [Device Cluster Control (Core Feature)](#5-device-cluster-control-core-feature)
+6. [Middleware Server Management](#6-middleware-server-management)
+7. [Output Modes --output](#7-output-modes---output)
+8. [Operational Scenarios](#8-operational-scenarios)
+9. [Other Commands](#9-other-commands)
+
+---
+
+## 1. Core Concept: Cluster Control
+
+JPY CLI is designed for **cross-server cluster batch control**. An active group can contain multiple middleware servers, each managing N device slots.
+
+```
+Group: production
+├── 192.168.1.201:443  →  Seats 1~30  →  30 devices
+├── 192.168.1.202:443  →  Seats 1~30  →  30 devices
+└── ... N middleware servers
+```
+
+**Without filters** = operate on ALL devices across ALL middleware in the active group:
+
+```bash
+jpy middleware device list          # List all devices
+jpy middleware device reboot --all  # Reboot all devices
+```
+
+**With filters** = precise control:
+
+```bash
+jpy middleware device list -s 192.168.1.201                   # One server
+jpy middleware device reboot -s 192.168.1.201 --seat 3 --all  # One device
+```
+
+---
+
+## 2. Self-Help Discovery with `--help`
+
+**`--help` is your primary tool for exploring commands.** Every command supports it.
+
+```bash
+jpy --help                              # Top-level commands
+jpy middleware --help                   # middleware subcommands
+jpy middleware device --help            # device subcommands
+jpy middleware device list --help       # Full flags for list
+jpy middleware device reboot --help     # Full flags for reboot
+jpy middleware device shell --help      # Full flags for shell
+```
+
+Example output of `jpy middleware device list --help`:
+
+```
+Flags:
+      --all                          Execute on all matched devices (skip confirmation)
+      --authorized string[="true"]   Filter by auth status (true/false)
+      --filter-adb string            Filter by ADB status (true/false)
+      --filter-has-ip string         Filter by IP presence (true/false)
+      --filter-online string         Filter by online status (true/false)
+      --filter-usb string            Filter by USB mode (true=USB, false=OTG)
+      --filter-uuid string           Filter by UUID presence (true/false)
+  -g, --group string                 Target server group
+  -h, --help                         help for list
+  -i, --interactive                  Interactive TUI selection mode
+  -l, --limit int                    Limit display count (default 100)
+  -o, --output string                Output mode: tui/plain/json (default "tui")
+      --seat int                     Seat number (default -1)
+  -s, --server string                Server address pattern (e.g. 192.168.1)
+  -u, --uuid string                  Device UUID (fuzzy match)
+```
+
+> **Rule**: When unsure, run `--help` first.
+
+---
+
+## 3. Control Granularity: Global to Single Device
+
+Using `device reboot` as example:
+
+| Granularity | Command | Scope |
+|-------------|---------|-------|
+| **Global** | `jpy middleware device reboot --all` | All devices in active group |
+| **By group** | `jpy middleware device reboot -g production --all` | All devices in named group |
+| **By subnet** | `jpy middleware device reboot -s "192.168.1" --all` | All devices on matching servers |
+| **By server** | `jpy middleware device reboot -s "192.168.1.201" --all` | All devices on one server |
+| **By status** | `jpy middleware device reboot --filter-online true --all` | All online devices |
+| **Single device** | `jpy middleware device reboot -s "192.168.1.201" --seat 5 --all` | Seat 5 on one server |
+| **By UUID** | `jpy middleware device reboot -u "ABCD1234" --all` | Exactly one device |
+
+The same filter logic applies to: `list`, `status`, `reboot`, `usb`, `adb`, `shell`, `export`.
+
+---
+
+## 4. Command Tree
 
 ```
 jpy
-├── middleware                # Middleware management (LAN)
-│   ├── list                  # List servers in current group
-│   ├── auth                  # Authentication & server management
-│   │   ├── login             # Login to server
-│   │   ├── create            # Batch generate server configs
-│   │   ├── list              # List configured servers
-│   │   ├── select            # Select/switch active group
-│   │   ├── import            # Import configs from JSON file
-│   │   ├── export            # Export current group config
-│   │   └── template          # Generate config template
-│   ├── device                # Device management
-│   │   ├── list              # List device details
-│   │   ├── status            # Server status & device statistics
-│   │   ├── export            # Export device info to file
-│   │   ├── reboot            # Reboot devices (power cycle)
-│   │   ├── usb               # Switch USB mode
-│   │   ├── adb               # Control ADB state
-│   │   └── log               # View single device log
-│   ├── admin                 # Admin commands
-│   │   ├── auto-auth         # Auto-scan and authorize servers
-│   │   └── update-cluster    # Batch update control platform address
-│   ├── remove                # Remove/soft-delete servers
-│   ├── relogin               # Reconnect soft-deleted servers
-│   ├── restart               # Restart boxCore service
-│   └── ssh                   # SSH to middleware (auto-password)
-├── cloud                     # Cloud Platform Remote API
-│   ├── config                # View/modify cloud config
-│   │   └── init-configs      # Create sample config files
-│   └── stress                # Device modification stress test
-├── admin                     # System admin commands
-│   └── middleware
-│       ├── generate          # Generate license codes
-│       ├── list              # List license codes
-│       └── get-root-password # Get root password
-├── config                    # Local config management
-│   ├── list                  # List all configs
-│   ├── get                   # Get config value
-│   └── set                   # Set config value
-├── server                    # Backend services
-│   ├── ssh                   # Start SSH jump server
-│   └── web                   # Start web server
-├── proxy                     # Transparent proxy
-├── tools                     # Utilities
-│   ├── middleware create     # Batch generate middleware configs
-│   └── completion-install    # Install shell completion
-└── log                       # View CLI operation logs
+├── middleware                     Middleware management (LAN cluster control)
+│   ├── list                       List middleware servers in active group
+│   ├── auth                       Auth & server management
+│   │   ├── login                  Add/login to a middleware server
+│   │   ├── create                 Batch generate and add server configs
+│   │   ├── list                   List configured servers
+│   │   ├── select                 Switch active group
+│   │   ├── import                 Import from JSON file
+│   │   ├── export                 Export current group config
+│   │   └── template               Generate config template
+│   ├── device                     ★ Device cluster control (core)
+│   │   ├── list                   List device details (multi-filter)
+│   │   ├── status                 Server health & device statistics
+│   │   ├── reboot                 Batch/single device reboot
+│   │   ├── usb                    Batch/single USB mode switch
+│   │   ├── adb                    Batch/single ADB control
+│   │   ├── shell                  Send shell command to a device
+│   │   ├── export                 Export device info to file
+│   │   └── log                    Real-time log for single device
+│   ├── admin
+│   │   ├── auto-auth              Auto-scan and authorize servers
+│   │   └── update-cluster         Batch update control platform address
+│   ├── remove                     Remove/soft-delete servers
+│   ├── relogin                    Reconnect soft-deleted servers
+│   ├── restart                    Restart boxCore service
+│   └── ssh                        SSH to middleware (auto-password)
+├── cloud                          Cloud Platform Remote API
+│   ├── config / init-configs
+│   └── stress
+├── admin middleware generate/list/get-root-password
+├── config list/get/set
+├── server ssh/web
+├── proxy
+├── tools middleware create / completion-install
+└── log
 ```
 
 ---
 
-## Global Flags
+## 5. Device Cluster Control (Core Feature)
 
-| Flag | Type | Description |
-|------|------|-------------|
-| `--debug` | bool | Enable debug logging (also outputs to console) |
-| `--log-level` | string | Log level: `debug`/`info`/`warn`/`error` |
+### 5.1 Common Filter Flags (All `device` Subcommands)
 
----
+| Flag | Alias | Description | Example |
+|------|-------|-------------|---------|
+| `--group` | `-g` | Server group name | `-g production` |
+| `--server` | `-s` | Server URL fuzzy match | `-s "192.168.1"` |
+| `--uuid` | `-u` | Device UUID fuzzy match | `-u "ABCD1234"` |
+| `--seat` | — | Exact seat number | `--seat 5` |
+| `--authorized` | — | Authorized servers only | `--authorized` |
+| `--filter-online` | — | Filter by biz online (true/false) | `--filter-online true` |
+| `--filter-adb` | — | Filter by ADB state (true/false) | `--filter-adb true` |
+| `--filter-usb` | — | Filter by USB mode (true=USB, false=OTG) | `--filter-usb false` |
+| `--filter-has-ip` | — | Filter by IP presence (true/false) | `--filter-has-ip false` |
+| `--filter-uuid` | — | Filter by UUID presence (true/false) | `--filter-uuid true` |
+| `--all` | — | Execute on all matches, skip confirmation | `--all` |
+| `--interactive` | `-i` | Interactive TUI selection | `-i` |
+| `--output` | `-o` | tui / plain / json | `-o json` |
 
-## Output Modes `--output` / `-o`
+> See all flags for any command: `jpy middleware device <subcmd> --help`
 
-Most commands support three output modes:
-
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| `tui` | Default interactive TUI | Human operation |
-| `plain` | Plain text, tab-separated | Script parsing, Win7 SSH |
-| `json` | Structured JSON | AI/programmatic parsing |
-
-### Commands Supporting `--output`
-
-| Command | tui | plain | json |
-|---------|-----|-------|------|
-| `middleware list` | ✅ | ✅ | ✅ |
-| `middleware remove` | ✅ | ✅ | ✅ |
-| `middleware relogin` | ✅ | ✅ | ✅ |
-| `middleware auth login` | ✅ | ✅ | ✅ |
-| `middleware auth create` | ✅ | ✅ | ✅ |
-| `middleware auth list` | ✅ | ✅ | ✅ |
-| `middleware auth select` | ✅ | ✅ | ✅ |
-| `middleware device list` | ✅ | ✅ | ✅ |
-| `middleware device status` | ✅ | ✅ | ✅ |
-| `middleware device export` | ✅ | ✅ | ✅ |
-| `middleware device reboot` | ✅ | ✅ | ✅ |
-| `middleware device usb` | ✅ | ✅ | ✅ |
-| `middleware device adb` | ✅ | ✅ | ✅ |
-| `cloud config` | - | ✅ | ✅ |
-| `cloud stress` | ✅ | ✅ | ✅ |
-
-> **Win7 Note**: Win7 SSH does not support TUI raw mode. Use `-o plain` or `-o json` to avoid crashes.
-
----
-
-## Middleware Management (`middleware`)
-
-### `middleware list` — List Servers
+### 5.2 `device list` — List Devices
 
 ```bash
-jpy middleware list [-o json|plain]
+jpy middleware device list                                    # All devices (TUI)
+jpy middleware device list -s 192.168.1.201                  # One server
+jpy middleware device list --filter-online true -o json      # Online devices, JSON
+jpy middleware device list --filter-has-ip false -o plain    # No-IP devices
+jpy middleware device list -s 192.168.1.201 --seat 5         # Single seat
 ```
 
-**JSON Output**:
+**JSON output**:
 ```json
 {
-  "group": "default",
-  "total": 3,
-  "servers": [
-    { "url": "192.168.1.201:443", "username": "admin", "status": "ok" }
+  "total": 120,
+  "devices": [
+    {
+      "server": "192.168.1.201:443", "seat": 1, "uuid": "ABCD1234",
+      "ip": "10.0.0.101", "online": true, "biz_online": true,
+      "usb_mode": "otg", "adb": false, "model": "Redmi Note 12", "android": "13"
+    }
   ]
 }
 ```
 
-### `middleware auth login` — Login to Server
+### 5.3 `device status` — Server Statistics
 
 ```bash
-jpy middleware auth login <url> -u <username> -p <password> [-g <group>] [-o json]
+jpy middleware device status                        # All servers
+jpy middleware device status --detail               # With SN / cluster address
+jpy middleware device status --ip-count-lt 25       # Servers with few IPs
+jpy middleware device status --biz-online-lt 10     # Low-online servers
+jpy middleware device status --help                 # All available flags
 ```
 
-### `middleware auth create` — Batch Generate Server Configs
+Additional status-only filters: `--auth-failed`, `--fw-has/--fw-not`, `--speed-gt/lt`, `--cluster-contains/--cluster-not-contains`, `--ip-count-gt/lt`, `--biz-online-gt/lt`, `--uuid-count-gt/lt`
+
+### 5.4 `device reboot` — Reboot Devices
 
 ```bash
-jpy middleware auth create --ip <range> [-P <port>] [-u <user>] [-p <pass>] [-o json]
-```
-
-> Non-interactive mode (`-o json/plain`) requires `--ip`.
-
-### `middleware auth list` — List Configured Servers
-
-```bash
-jpy middleware auth list [--details] [-o json]
-```
-
-### `middleware auth select` — Select/Switch Group
-
-```bash
-# List groups
-jpy middleware auth select -o json
-
-# Switch group
-jpy middleware auth select <group_name> -o json
-```
-
-### `middleware auth import/export/template`
-
-```bash
-jpy middleware auth import <file>
-jpy middleware auth export [-o <output_file>]
-jpy middleware auth template
-```
-
-### `middleware remove` — Remove Servers
-
-```bash
-jpy middleware remove [--search <keyword>] [--has-error] [--force] [--all] [-o json]
-```
-
-> Non-interactive mode requires `--all`, `--has-error`, or `--search`.
-
-### `middleware relogin` — Reconnect Soft-Deleted Servers
-
-```bash
-jpy middleware relogin [-o json]
-```
-
-**JSON Output**:
-```json
-{
-  "total": 5, "restored": 3, "failed": 2,
-  "results": [
-    { "url": "192.168.1.201:443", "status": "restored" },
-    { "url": "192.168.1.202:443", "status": "failed", "error": "connection refused" }
-  ]
-}
-```
-
-### `middleware ssh` — SSH to Middleware
-
-```bash
-jpy middleware ssh <IP>
-```
-
-### `middleware restart` — Restart boxCore Service
-
-```bash
-jpy middleware restart [filter flags]
-```
-
----
-
-## Device Management (`middleware device`)
-
-### Common Filter Flags
-
-| Flag | Alias | Description |
-|------|-------|-------------|
-| `--group` | `-g` | Server group name |
-| `--server` | `-s` | Server address fuzzy match |
-| `--uuid` | `-u` | Device UUID fuzzy match |
-| `--seat` | — | Seat number |
-| `--authorized` | — | Authorized servers only |
-| `--filter-online` | — | Filter by online status |
-| `--filter-adb` | — | Filter by ADB status |
-| `--filter-usb` | — | Filter by USB mode (true=USB, false=OTG) |
-| `--filter-has-ip` | — | Filter by IP presence |
-| `--filter-uuid` | — | Filter by UUID presence |
-| `--interactive` | `-i` | Interactive selection mode |
-| `--all` | — | Execute on all matched devices |
-| `--output` | `-o` | Output mode (tui/plain/json) |
-
-### `device list` — List Device Details
-
-```bash
-jpy middleware device list [filters] [-o json]
-```
-
-**JSON**: `{ "total": N, "devices": [{ "server", "seat", "uuid", "ip", "online", "biz_online", "usb_mode", "adb", "model", "android" }] }`
-
-### `device status` — Server Status & Statistics
-
-```bash
-jpy middleware device status [filters] [--detail] [-o json]
-```
-
-Additional status-specific filters: `--auth-failed`, `--fw-has/--fw-not`, `--speed-gt/--speed-lt`, `--cluster-contains/--cluster-not-contains`, `--sn-gt/--sn-lt`, `--ip-count-gt/--ip-count-lt`, `--biz-online-gt/--biz-online-lt`, `--uuid-count-gt/--uuid-count-lt`
-
-**JSON**: `{ "summary": { totals... }, "servers": [{ per-server stats... }] }`
-
-### `device export` — Export Device Info
-
-```bash
-jpy middleware device export [file] [filters] [--export-id|--export-ip|--export-uuid|--export-seat|--export-auto] [-o json]
-```
-
-### `device reboot` — Reboot Devices
-
-```bash
-jpy middleware device reboot [filters] [--all] [-o json]
-```
-
-Exit codes: 0=all success, 1=partial failure, 2=all failed
-
-### `device usb` — Switch USB Mode
-
-```bash
-jpy middleware device usb --mode <host|device> [filters] [--all] [-o json]
-```
-
-### `device adb` — Control ADB State
-
-```bash
-jpy middleware device adb --set <on|off> [filters] [--all] [-o json]
-```
-
-### `device log` — View Device Log
-
-```bash
-jpy middleware device log -s <server_ip> --seat <seat_number>
-```
-
----
-
-## Middleware Admin (`middleware admin`)
-
-```bash
-jpy middleware admin auto-auth
-jpy middleware admin update-cluster <new_address> [--server <match>] [--group <group>] [--authorized] [--force]
-```
-
----
-
-## Cloud Platform (`cloud`)
-
-```bash
-jpy cloud config [-o json]
-jpy cloud config init-configs
-jpy cloud stress [--config <file>] [-o json]
-```
-
----
-
-## System Admin (`admin`)
-
-```bash
-jpy admin middleware generate
-jpy admin middleware list
-jpy admin middleware get-root-password
-```
-
----
-
-## Local Config (`config`)
-
-```bash
-jpy config list
-jpy config get <key>
-jpy config set <key> <value>
-```
-
-| Config Key | Default | Description |
-|------------|---------|-------------|
-| `log_level` | `info` | Log level |
-| `log_output` | `file` | Output: `console`/`file`/`both` |
-| `max_concurrency` | `5` | Max concurrency |
-| `connect_timeout` | `3` | Connection timeout (seconds) |
-
----
-
-## Other Commands
-
-```bash
-jpy proxy [-p <port>]            # Transparent proxy
-jpy server ssh                   # SSH jump server
-jpy server web                   # Web server
-jpy tools completion-install     # Install shell completion
-jpy log [-f] [-n <lines>] [--grep <filter>]  # CLI operation logs
-```
-
----
-
-## Operational Scenarios
-
-### AI Remote Batch Control (JSON Mode)
-
-```bash
-jpy middleware list -o json
-jpy middleware device status -o json
+jpy middleware device reboot --all                              # All devices
+jpy middleware device reboot -s 192.168.1.201 --all            # One server
+jpy middleware device reboot --filter-online true --all        # Online only
+jpy middleware device reboot -s 192.168.1.201 --seat 5 --all  # Single device
 jpy middleware device reboot --filter-has-ip false --all -o json
 ```
 
-### Win7 SSH Environment (Plain Mode)
+Exit codes: `0`=all success, `1`=partial failure, `2`=all failed
+
+### 5.5 `device usb` — Switch USB Mode
 
 ```bash
-jpy middleware device status -o plain
-jpy middleware device list -o plain
-jpy middleware remove --has-error --all -o plain
+jpy middleware device usb --mode host --all                   # All → OTG
+jpy middleware device usb --mode device -s 192.168.1.201 --all  # One server → USB
+jpy middleware device usb --mode host --filter-usb true --all   # USB→OTG only
+jpy middleware device usb --mode device --authorized --filter-has-ip false --filter-usb false --all
 ```
 
-### Device Initial Online Fix (IP Recovery Loop)
+`--mode host` = OTG | `--mode device` = USB
+
+### 5.6 `device adb` — Control ADB
 
 ```bash
-# Switch no-IP OTG devices to USB
-jpy middleware device usb --mode device --authorized --filter-has-ip false --filter-usb false --all -o json
-# Switch back to OTG
-jpy middleware device usb --mode host --authorized --filter-has-ip false --filter-usb true --all -o json
-# Check stats
-jpy middleware device status -o json
-# Repeat until IP count stabilizes (3 loops)
-# Force reboot remaining no-IP devices
-jpy middleware device reboot --filter-has-ip false --all -o json
+jpy middleware device adb --set on --all                          # Enable all
+jpy middleware device adb --set off --filter-online true --all    # Disable online
+jpy middleware device adb --set off -s 192.168.1.201 --all       # One server
 ```
 
-### New Server Onboarding
+### 5.7 `device shell` — Send Shell Command
 
+```bash
+# Reboot to fastboot (pre-flash, no ADB required)
+jpy middleware device shell --server 192.168.255.1 --ip 192.168.10.195 --command "reboot bootloader"
+
+# By seat number
+jpy middleware device shell -s 192.168.255.1 --seat 3 -c "reboot bootloader"
+
+# Query device info (JSON)
+jpy middleware device shell -s 192.168.255.1 --ip 192.168.10.195 -c "getprop ro.product.model" -o json
+```
+
+Required: `--server` + `--command`. Target: `--ip` OR `--seat`.
+
+### 5.8 `device export` — Export Device Info
+
+```bash
+jpy middleware device export output.txt                                           # All fields
+jpy middleware device export uuids.txt --export-uuid --export-ip --filter-uuid true
+jpy middleware device export dhcp.txt --export-auto                               # Smart: fill missing IPs
+jpy middleware device export -o json > devices.json
+```
+
+### 5.9 `device log` — Real-time Device Log
+
+```bash
+jpy middleware device log -s 192.168.1.201 --seat 12   # Must specify single device
+```
+
+Press `Ctrl+C` to exit. Auto-restores USB/ADB state.
+
+---
+
+## 6. Middleware Server Management
+
+```bash
+jpy middleware auth select -o json                              # List groups
+jpy middleware auth select production                           # Switch group
+jpy middleware list -o json                                     # Servers in group
+jpy middleware auth login "192.168.1.201" -u admin -p admin    # Add server
+jpy middleware auth create --ip "192.168.1.201-230" -o json    # Batch add
+jpy middleware remove --has-error --all -o json                 # Remove errored
+jpy middleware relogin -o json                                  # Retry soft-deleted (x3)
+jpy middleware ssh 192.168.1.201                                # SSH with auto-password
+jpy middleware admin update-cluster "10.0.1.100" --authorized  # Update cluster addr
+```
+
+---
+
+## 7. Output Modes `--output`
+
+| Mode | Flag | Description | Use Case |
+|------|------|-------------|----------|
+| TUI | `tui` (default) | Interactive paged UI | Human operation |
+| Plain | `plain` | Tab-separated text | Shell scripts, Win7 SSH |
+| JSON | `json` | Structured JSON | AI/automation |
+
+> **Win7 SSH**: TUI crashes due to raw mode. Always use `-o plain` or `-o json`.
+
+---
+
+## 8. Operational Scenarios
+
+### A. New Server Batch Onboarding
 ```bash
 jpy middleware auth create --ip "192.168.1.201-230" -o json
 jpy middleware device status -o json
@@ -366,14 +305,67 @@ jpy middleware remove --has-error --all -o json
 jpy middleware relogin -o json  # repeat 3x
 ```
 
----
-
-## Build & Release
-
+### B. Device IP Recovery Loop
 ```bash
-make build          # Development build
-make dist           # Cross-platform release (Linux/macOS/Windows amd64+arm64)
-make dist-win7      # Win7 compatible build (Go 1.19, excludes cloud module)
+jpy middleware device usb --mode device --authorized --filter-has-ip false --filter-usb false --all -o json
+jpy middleware device usb --mode host --authorized --filter-has-ip false --filter-usb true --all -o json
+jpy middleware device status -o json  # check; repeat until stable
+jpy middleware device reboot --filter-has-ip false --all -o json  # last resort
 ```
 
-Config: `~/.jpy/config.yaml` | Data: `~/.jpy/servers.json` | Logs: `~/.jpy/logs/jpy.log`
+### C. Pre-Flash: Reboot to Fastboot
+```bash
+jpy middleware device list -s 192.168.255.1 --filter-online true -o json
+jpy middleware device shell -s 192.168.255.1 --ip 192.168.10.195 -c "reboot bootloader"
+```
+
+### D. AI/Automation (JSON Mode)
+```bash
+jpy middleware device status -o json
+jpy middleware device list --filter-online true -o json
+jpy middleware device reboot --filter-has-ip false --all -o json  # exits 0/1/2
+jpy middleware device shell -s ... --ip ... -c "getprop ro.build.version.release" -o json
+```
+
+### E. Security: Disable ADB
+```bash
+jpy middleware device adb --set off --filter-online true --all -o json
+jpy middleware device list --filter-adb true -o plain  # verify
+```
+
+---
+
+## 9. Other Commands
+
+```bash
+# Config
+jpy config list
+jpy config set max_concurrency 20
+jpy config set connect_timeout 5
+
+# Cloud Platform
+jpy cloud config -o json
+jpy cloud stress -o json
+
+# Logs & Tools
+jpy log -f --grep ERROR
+jpy proxy -p 8888
+jpy server ssh
+jpy tools completion-install
+
+# Admin
+jpy admin middleware generate
+jpy admin middleware list
+```
+
+---
+
+## Build
+
+```bash
+make build        # Current platform
+make dist         # All platforms (Linux/macOS/Windows amd64+arm64)
+make dist-win7    # Win7 compatible (Go 1.19, no cloud module)
+```
+
+Config: `~/.jpy/` | Logs: `~/.jpy/logs/jpy.log`
