@@ -138,6 +138,33 @@ func (api *DeviceAPI) ControlADB(seat int, enable bool) error {
 	})
 }
 
+// ExecuteShell sends a shell command to the specified device and returns the result.
+func (api *DeviceAPI) ExecuteShell(seat int, command string) (*model.ShellResult, error) {
+	resp, err := api.transport.SendRequest(model.FuncCMDWithResult, map[string]interface{}{
+		"seat":  seat,
+		"shell": command,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Code != nil && *resp.Code != 0 {
+		msg := "unknown error"
+		if resp.Msg != nil {
+			msg = *resp.Msg
+		}
+		return nil, fmt.Errorf("命令执行失败 (code %d): %s", *resp.Code, msg)
+	}
+
+	b, _ := msgpack.Marshal(resp.Data)
+	var result model.ShellResult
+	dec := msgpack.NewDecoder(bytes.NewReader(b))
+	dec.SetCustomStructTag("json")
+	if err := dec.Decode(&result); err != nil {
+		return nil, fmt.Errorf("解析 ShellResult 失败: %v", err)
+	}
+	return &result, nil
+}
+
 // sendControlRequest sends a control request and checks for server errors.
 func (api *DeviceAPI) sendControlRequest(code int, data interface{}) error {
 	resp, err := api.transport.SendRequest(code, data)

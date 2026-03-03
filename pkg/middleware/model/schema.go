@@ -14,6 +14,9 @@ const (
 	// Terminal
 	FuncTerminalInit = 9
 
+	// Shell Command (Guard)
+	FuncCMDWithResult = 289 // 向设备发送 shell 命令并返回输出
+
 	// Device Control (Mirror)
 	FuncRebootDeviceMirror = 155
 	FuncSwitchUSBMirror    = 218
