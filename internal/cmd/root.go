@@ -48,14 +48,19 @@ var rootCmd = &cobra.Command{
 
 func Execute() {
 	// --remote 拦截：在 Cobra 解析之前检查，命中则转发到远端
+	// 注意：file 子命令有自己的 --remote 处理逻辑，不走全局拦截
 	if addr, args := extractRemoteFlag(os.Args[1:]); addr != "" {
-		// shell 子命令走专用远程处理
-		if len(args) > 0 && args[0] == "shell" {
+		// file 子命令不走全局拦截，它的 --remote 是目标服务器地址
+		if len(args) > 0 && args[0] == "file" {
+			// 跳过拦截，让 Cobra 正常解析
+		} else if len(args) > 0 && args[0] == "shell" {
+			// shell 子命令走专用远程处理
 			remoteShellExec(addr, args[1:])
 			return
+		} else {
+			remoteExec(addr, args)
+			return
 		}
-		remoteExec(addr, args)
-		return
 	}
 
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "启用调试日志")
