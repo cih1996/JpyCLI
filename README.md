@@ -1,0 +1,154 @@
+# JPY CLI
+
+JPY 中间件管理命令行工具，面向 AI/脚本设计，零配置，无状态。
+
+## 安装
+
+从 [Releases](https://github.com/cih1996/JpyCLI/releases) 下载对应平台的二进制文件：
+
+| 平台 | 文件 |
+|------|------|
+| Linux x64 | jpy-linux-amd64.tar.gz |
+| Linux ARM64 | jpy-linux-arm64.tar.gz |
+| macOS x64 | jpy-darwin-amd64.tar.gz |
+| macOS ARM64 | jpy-darwin-arm64.tar.gz |
+| Windows x64 | jpy-windows-amd64.zip |
+
+解压后将 `jpy` 放入 PATH 即可使用。
+
+## 功能板块
+
+### 1. Device - 中间件设备管理
+
+连接 JPY 中间件服务器，管理 Android 设备。
+
+```bash
+# 列出所有设备
+jpy device list -s 192.168.1.1 -u admin -p 123456 -o json
+
+# 在指定机位执行命令
+jpy device shell "ls /sdcard" -s 192.168.1.1 -u admin -p 123456 --seat 3
+
+# 重启设备
+jpy device reboot -s 192.168.1.1 -u admin -p 123456 --seat 3
+
+# 切换 USB 模式
+jpy device usb -s 192.168.1.1 -u admin -p 123456 --mode host --seat 3
+
+# 开关 ADB
+jpy device adb -s 192.168.1.1 -u admin -p 123456 --set on --seat 3
+
+# 查看服务器状态
+jpy device status -s 192.168.1.1 -u admin -p 123456 -o json
+```
+
+### 2. COM - 串口硬件控制
+
+操作 USB HUB 控制板（20路通道），通过 COM 串口通信。
+
+```bash
+# 列出可用串口
+jpy com list -o json
+
+# 查看设备通道状态
+jpy com devices --port COM3 -o json
+
+# 设置通道模式（HUB/OTG）
+jpy com set-mode --port COM3 --mode hub --channel 5
+
+# 重启通道
+jpy com restart --port COM3 --channel 3
+```
+
+### 3. Shell - 远程系统命令
+
+在远端机器执行系统 shell 命令，支持同步和异步模式。
+
+```bash
+# 同步执行
+jpy shell --remote 192.168.1.100:9090 -c "dir C:\Users"
+
+# 异步执行（长任务）
+jpy shell --remote 192.168.1.100:9090 -c "fastboot flash system system.img" --async --timeout 900
+
+# 查询任务状态
+jpy shell --remote 192.168.1.100:9090 --task <task_id>
+
+# 列出所有任务
+jpy shell --remote 192.168.1.100:9090 --tasks
+
+# 终止任务
+jpy shell --remote 192.168.1.100:9090 --kill <task_id>
+```
+
+### 4. Flash - 批量刷机
+
+集成 device + com 操作，实现批量刷机自动化。
+
+```bash
+# 刷 COM4 所有通道
+jpy flash run --com COM4 --mw 192.168.255.2 --script D:\flash\flash.cmd -y
+
+# 刷指定通道范围
+jpy flash run --com COM4 --ch 1-10 --mw 192.168.255.2 --script D:\flash\flash.cmd
+
+# 远程刷机（COM口在远程机器上）
+jpy flash run --remote 192.168.1.100:9090 --com COM4 --mw 192.168.255.2 --script D:\flash\flash.cmd
+
+# 模拟运行
+jpy flash run --com COM4 --mw 192.168.255.2 --script D:\flash\flash.cmd --dry
+```
+
+**工作流程：**
+1. 检查设备状态
+2. 发送 reboot bootloader
+3. 切换 COM 通道为 HUB 模式
+4. 执行刷机脚本
+5. 切换回 OTG 模式
+
+### 5. File - 远程文件传输
+
+支持大文件传输（最大 5GB），流式传输不占内存。
+
+```bash
+# 上传本地文件到远程
+jpy file push ./rom.zip --remote 192.168.1.100:9090 --dest D:\flash\rom.zip
+
+# 让远程从 URL 下载文件
+jpy file pull "https://example.com/rom.zip" --remote 192.168.1.100:9090 --dest D:\flash\rom.zip
+
+# 大文件设置更长超时
+jpy file push ./large.zip --remote 192.168.1.100:9090 --timeout 3600
+```
+
+## 远程模式
+
+启动 server 后，可通过 `--remote` 参数远程调用任意命令：
+
+```bash
+# 启动 server（在远程机器上）
+jpy server --port 9090
+
+# 远程调用（在本地）
+jpy --remote 192.168.1.100:9090 device list -s 192.168.1.1 -u admin -p 123456
+jpy --remote 192.168.1.100:9090 com list
+```
+
+## 输出格式
+
+所有命令支持 `-o plain`（默认）和 `-o json` 两种输出模式。
+
+AI 调用建议使用 `-o json` 便于解析。
+
+## 退出码
+
+| 码 | 含义 |
+|----|------|
+| 0 | 成功 |
+| 1 | 失败 |
+| 124 | 超时 |
+| 137 | 被终止 |
+
+## License
+
+MIT
