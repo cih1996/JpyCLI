@@ -3,7 +3,6 @@ package fetcher
 import (
 	"context"
 	"fmt"
-	"jpy-cli/pkg/config"
 	"jpy-cli/pkg/logger"
 	"jpy-cli/pkg/middleware/connector"
 	"jpy-cli/pkg/middleware/device/api"
@@ -20,17 +19,13 @@ type ServerResult struct {
 	OrderIndex int
 }
 
-// FetchDevices concurrently fetches devices from multiple servers.
-// It returns a channel that emits ServerResult items as interface{}.
-func FetchDevices(ctx context.Context, servers []config.LocalServerConfig, cfg *config.Config) (chan interface{}, int) {
-	concurrency := config.GlobalSettings.MaxConcurrency
-	if concurrency < 1 {
-		concurrency = 5
-	}
+// FetchDevices concurrently fetches devices from servers.
+// 接受 connector.ServerInfo 切片，不依赖配置文件。
+func FetchDevices(ctx context.Context, servers []connector.ServerInfo) (chan interface{}, int) {
+	concurrency := 5
 
 	resultsChan := make(chan interface{}, len(servers))
 
-	// Map server URL to its index for sorting
 	serverOrder := make(map[string]int)
 	for i, s := range servers {
 		serverOrder[s.URL] = i
@@ -40,16 +35,10 @@ func FetchDevices(ctx context.Context, servers []config.LocalServerConfig, cfg *
 	sem := make(chan struct{}, concurrency)
 
 	for _, s := range servers {
-		// Skip disabled servers
-		if s.Disabled {
-			continue
-		}
-
 		wg.Add(1)
-		go func(server config.LocalServerConfig) {
+		go func(server connector.ServerInfo) {
 			defer wg.Done()
 
-			// Acquire semaphore with context check
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
@@ -57,7 +46,6 @@ func FetchDevices(ctx context.Context, servers []config.LocalServerConfig, cfg *
 			}
 			defer func() { <-sem }()
 
-			// Check context before proceeding
 			select {
 			case <-ctx.Done():
 				return
@@ -69,7 +57,6 @@ func FetchDevices(ctx context.Context, servers []config.LocalServerConfig, cfg *
 				OrderIndex: serverOrder[server.URL],
 			}
 
-			connector := connector.NewConnectorService(cfg)
 			ws, err := connector.Connect(server)
 			if err != nil {
 				res.Error = err
@@ -93,7 +80,6 @@ func FetchDevices(ctx context.Context, servers []config.LocalServerConfig, cfg *
 			}
 			res.Devices = devices
 
-			// Check context before next step
 			select {
 			case <-ctx.Done():
 				return
@@ -122,7 +108,7 @@ func FetchDevices(ctx context.Context, servers []config.LocalServerConfig, cfg *
 	return resultsChan, len(servers)
 }
 
-// ProcessResults converts raw TUI results into a flat list of DeviceInfo
+// ProcessResults converts raw results into a flat list of DeviceInfo
 func ProcessResults(rawResults []interface{}) ([]model.DeviceInfo, int) {
 	var allDevices []model.DeviceInfo
 	var errorCount int

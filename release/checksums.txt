@@ -1,0 +1,5 @@
+9f6c0cd8b9417a889ca1ef31633c4e6bb9de4d05ef85279dbb0584edb3652e56  jpy-darwin-amd64.tar.gz
+6f60a09e7cdec8701a77e4a37cdbbb8b49b0438cb3e8b442d3919edeb013f29a  jpy-darwin-arm64.tar.gz
+f9bb2ef5e5933c63992530ee9ab54ae46866419c563dbfe803a8e3a91bdfacd8  jpy-linux-amd64.tar.gz
+0ecd7905b667474700d1364aa26855a81c0bbe502d41b5c4164e8ff29c1ad753  jpy-linux-arm64.tar.gz
+dccf23f1f54be97b0f5a3d0c3819105cc4121fcc232c6c218c9632bff5e0c441  jpy-windows-amd64.zip
