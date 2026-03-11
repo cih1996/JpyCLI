@@ -5,8 +5,14 @@ DIST_DIR := dist
 GO119 := $(HOME)/go/bin/go1.19.13
 WIN7_BUILD_DIR := /tmp/jpy-win7-build
 
+# 版本信息
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+BUILD_TIME := $(shell date -u '+%Y-%m-%d %H:%M:%S')
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+LDFLAGS := -s -w -X 'jpy-cli/internal/cmd.Version=$(VERSION)' -X 'jpy-cli/internal/cmd.BuildTime=$(BUILD_TIME)' -X 'jpy-cli/internal/cmd.GitCommit=$(GIT_COMMIT)'
+
 build:
-	go build -o bin/$(APP_NAME) ./cmd/jpy-cli
+	go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) ./cmd/jpy-cli
 
 generate:
 	./tools/generate_schema.sh
@@ -18,15 +24,15 @@ clean:
 dist:
 	mkdir -p $(DIST_DIR)
 	@echo "Building for Linux (amd64)..."
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $(DIST_DIR)/$(APP_NAME)-linux-amd64 ./cmd/jpy-cli
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-linux-amd64 ./cmd/jpy-cli
 	@echo "Building for Linux (arm64)..."
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o $(DIST_DIR)/$(APP_NAME)-linux-arm64 ./cmd/jpy-cli
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-linux-arm64 ./cmd/jpy-cli
 	@echo "Building for macOS (amd64)..."
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o $(DIST_DIR)/$(APP_NAME)-darwin-amd64 ./cmd/jpy-cli
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-darwin-amd64 ./cmd/jpy-cli
 	@echo "Building for macOS (arm64)..."
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o $(DIST_DIR)/$(APP_NAME)-darwin-arm64 ./cmd/jpy-cli
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-darwin-arm64 ./cmd/jpy-cli
 	@echo "Building for Windows (amd64)..."
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o $(DIST_DIR)/$(APP_NAME)-windows-amd64.exe ./cmd/jpy-cli
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-windows-amd64.exe ./cmd/jpy-cli
 	@echo "Done! Artifacts are in $(DIST_DIR)/"
 
 # Win7 兼容版：使用 Go 1.19.13 + 降级依赖编译

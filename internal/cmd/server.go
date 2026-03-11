@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -168,6 +169,7 @@ func newServerCmd() *cobra.Command {
 			mux.HandleFunc("/shell/kill", makeShellKillHandler(tm))
 			mux.HandleFunc("/file/upload", handleFileUpload)
 			mux.HandleFunc("/file/download", handleFileDownload)
+			mux.HandleFunc("/version", handleVersion)
 			mux.HandleFunc("/health", handleHealth)
 
 			addr := fmt.Sprintf(":%d", port)
@@ -445,6 +447,20 @@ func validateArgs(args []string) error {
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func handleVersion(w http.ResponseWriter, r *http.Request) {
+	info := map[string]interface{}{
+		"success": true,
+		"data": map[string]string{
+			"version":    Version,
+			"build_time": BuildTime,
+			"git_commit": GitCommit,
+			"go_version": runtime.Version(),
+			"platform":   runtime.GOOS + "/" + runtime.GOARCH,
+		},
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 // --- 文件上传 /file/upload ---
