@@ -259,7 +259,7 @@ func runStressUser(serverURL, secretKey, configFile string, loop int, interval, 
 			logger.Warn("无在线设备，跳过本轮")
 		} else {
 			// 执行改机
-			success, failed, deviceResults := performChangeOs(onlineIDs, &params, logger, timeout, deviceInfoMap)
+			success, failed, deviceResults := performChangeOs(onlineIDs, &params, logger, timeout, deviceInfoMap, round)
 			roundResult.Success = success
 			roundResult.Failed = failed
 			roundResult.Devices = deviceResults

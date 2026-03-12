@@ -3,6 +3,7 @@ package stress
 import (
 	"crypto/tls"
 	"fmt"
+	"strings"
 	"time"
 
 	"adminApi"
@@ -15,6 +16,17 @@ import (
 	"cnb.cool/accbot/goTool/wsPkg"
 	"github.com/gorilla/websocket"
 )
+
+// isRealError 判断 SDK 返回的错误是否是真正的错误
+// SDK 返回的 errPkg 类型是 interface{}，即使没有错误也可能不是 nil
+func isRealError(errPkg interface{}) bool {
+	if errPkg == nil {
+		return false
+	}
+	// SDK 的错误即使为空也会返回一个非 nil 的结构体，需要转字符串判断
+	errStr := fmt.Sprintf("%v", errPkg)
+	return errStr != "<nil>" && errStr != ""
+}
 
 // initSDKSilent 静默初始化 SDK，抑制内部日志输出到终端
 func initSDKSilent(serverURL string) error {
@@ -58,7 +70,7 @@ func loginWithSecret(secretKey string) error {
 	}
 
 	_, errPkg := sdkClient.LoginCtl.SecretKeyLogin(req)
-	if errPkg != nil {
+	if isRealError(errPkg) {
 		return fmt.Errorf("登录失败: %v", errPkg)
 	}
 	return nil
@@ -79,7 +91,7 @@ func fetchAllDevices(logger *StressLogger) ([]int64, map[int64]struct{ UUID, IP 
 		}
 
 		res, errPkg := sdkClient.UserDeviceCtl.GetUserDeviceList(req)
-		if errPkg != nil {
+		if isRealError(errPkg) {
 			return nil, nil, fmt.Errorf("获取设备列表失败: %v", errPkg)
 		}
 
@@ -131,7 +143,7 @@ func filterOnlineDevices(ids []int64, logger *StressLogger) []int64 {
 			res, errPkg = sdkClient.UserDeviceCtl.GetUserDeviceList(req)
 		}()
 
-		if errPkg != nil {
+		if isRealError(errPkg) {
 			logger.Error("获取设备状态失败 (第 %d 页): %v", pageNum, errPkg)
 			time.Sleep(5 * time.Second)
 			continue
@@ -166,9 +178,68 @@ func filterOnlineDevices(ids []int64, logger *StressLogger) []int64 {
 	return onlineIDs
 }
 
+// checkDevicesOnline 检查指定设备是否在线
+func checkDevicesOnline(deviceIDs []int64, logger *StressLogger) map[int64]bool {
+	result := make(map[int64]bool)
+	if len(deviceIDs) == 0 {
+		return result
+	}
+
+	// 构建待查设备ID集合
+	idSet := make(map[int64]bool)
+	for _, id := range deviceIDs {
+		idSet[id] = true
+	}
+
+	pageNum := 1
+	pageSize := 100
+
+	for {
+		req := &userDeviceCtl.GetUserDeviceListReq{
+			PageNum:  pageNum,
+			PageSize: pageSize,
+		}
+
+		var res *userDeviceCtl.GetUserDeviceListRes
+		var errPkg interface{}
+
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					errPkg = fmt.Errorf("panic: %v", r)
+				}
+			}()
+			res, errPkg = sdkClient.UserDeviceCtl.GetUserDeviceList(req)
+		}()
+
+		if isRealError(errPkg) {
+			logger.Error("检查设备在线状态失败: %v", errPkg)
+			break
+		}
+
+		if len(res.Records) == 0 {
+			break
+		}
+
+		for _, record := range res.Records {
+			d := record.DeviceInfo
+			if idSet[d.DeviceId] && d.Online {
+				result[d.DeviceId] = true
+			}
+		}
+
+		if len(res.Records) < pageSize {
+			break
+		}
+		pageNum++
+	}
+
+	return result
+}
+
 // performChangeOs 执行改机操作
-func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLogger, timeout time.Duration, deviceInfoMap map[int64]struct{ UUID, IP string }) (success, failed int, results []DeviceResult) {
-	logger.Info("开始为 %d 台设备发送改机请求...", len(deviceIDs))
+func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLogger, timeout time.Duration, deviceInfoMap map[int64]struct{ UUID, IP string }, round int) (success, failed int, results []DeviceResult) {
+	logger.Info("[第 %d 轮] 开始为 %d 台设备发送改机请求...", round, len(deviceIDs))
 
 	// 准备请求
 	var reqs []*changeOsCtl.ChangeOsReq
@@ -203,7 +274,9 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 		}
 		batchReqs := reqs[i:end]
 
-		logger.Info("发送第 %d-%d 个请求...", i+1, end)
+		if len(reqs) > batchSize {
+			logger.Info("发送第 %d-%d 个请求...", i+1, end)
+		}
 
 		maxRetries := 3
 		for retry := 0; retry < maxRetries; retry++ {
@@ -212,7 +285,7 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 			}
 
 			resList, errPkg := sdkClient.ChangeOsCtl.ChangeOs(batchReqs)
-			if errPkg == nil {
+			if !isRealError(errPkg) {
 				allResList = append(allResList, resList...)
 				break
 			}
@@ -231,7 +304,7 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 		return 0, len(deviceIDs), nil
 	}
 
-	logger.Info("收到 %d 个任务 ID，开始轮询状态...", len(allResList))
+	logger.Info("[第 %d 轮] 收到 %d 个任务 ID，开始轮询状态...", round, len(allResList))
 
 	// 构建任务映射
 	taskMap := make(map[int64]int64) // changeOsID -> deviceID
@@ -249,8 +322,16 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 		status   int
 		progress string
 	})
+	// 记录最后一次获取到的进度信息（用于超时时显示）
+	lastProgress := make(map[int64]string)
+	// 记录已完成改机、等待上线的设备 (deviceID -> true)
+	waitingOnline := make(map[int64]bool)
+	pollCount := 0
 
 	for {
+		pollCount++
+		elapsed := time.Since(startTime).Round(time.Second)
+
 		if time.Since(startTime) > timeout {
 			logger.Warn("轮询超时 (%v)", timeout)
 			break
@@ -268,7 +349,48 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 			break
 		}
 
-		// 分批查询状态
+		// 统计等待上线的设备数量
+		waitingCount := 0
+		for _, taskID := range pendingIDs {
+			deviceID := taskMap[taskID]
+			if waitingOnline[deviceID] {
+				waitingCount++
+			}
+		}
+
+		// 每 3 次轮询输出一次状态（减少日志量）
+		if pollCount%3 == 1 {
+			logger.Info("[第 %d 轮 | 轮询 #%d] 已耗时 %v, 待处理: %d 台 (其中 %d 台等待上线)", round, pollCount, elapsed, len(pendingIDs), waitingCount)
+		}
+
+		// 如果有等待上线的设备，检查它们的在线状态
+		if waitingCount > 0 {
+			var waitingDeviceIDs []int64
+			for _, taskID := range pendingIDs {
+				deviceID := taskMap[taskID]
+				if waitingOnline[deviceID] {
+					waitingDeviceIDs = append(waitingDeviceIDs, deviceID)
+				}
+			}
+
+			// 查询这些设备的在线状态
+			onlineStatus := checkDevicesOnline(waitingDeviceIDs, logger)
+			for _, taskID := range pendingIDs {
+				deviceID := taskMap[taskID]
+				if waitingOnline[deviceID] && onlineStatus[deviceID] {
+					// 设备已上线，标记为成功
+					completedTasks[taskID] = true
+					taskResults[taskID] = struct {
+						status   int
+						progress string
+					}{1, "改机完成并已上线"}
+					info := deviceInfoMap[deviceID]
+					logger.Info("  ✓ 设备 %d (%s) 已上线", deviceID, info.UUID)
+				}
+			}
+		}
+
+		// 分批查询改机任务状态
 		for i := 0; i < len(pendingIDs); i += batchSize {
 			end := i + batchSize
 			if end > len(pendingIDs) {
@@ -276,8 +398,21 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 			}
 			batchIDs := pendingIDs[i:end]
 
+			// 过滤掉已经在等待上线的任务，不需要再查询改机状态
+			var queryIDs []int64
+			for _, id := range batchIDs {
+				deviceID := taskMap[id]
+				if !waitingOnline[deviceID] && !completedTasks[id] {
+					queryIDs = append(queryIDs, id)
+				}
+			}
+
+			if len(queryIDs) == 0 {
+				continue
+			}
+
 			statusReq := changeOsCtl.GetChangeOsStatusReq{
-				TbChangeOsIds: &batchIDs,
+				TbChangeOsIds: &queryIDs,
 			}
 
 			var res []*changeOsCtl.GetChangeOsStatusRes
@@ -292,39 +427,93 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 				res, errPkg = sdkClient.ChangeOsCtl.GetChangeOsStatus(statusReq)
 			}()
 
-			if errPkg != nil {
+			if isRealError(errPkg) {
 				logger.Error("获取状态失败: %v", errPkg)
 				continue
 			}
 
 			for _, s := range res {
 				taskID := int64(s.Id)
+				deviceID := taskMap[taskID]
+				info := deviceInfoMap[deviceID]
 				status := int(s.Status)
+				progress := s.Progress
 
-				// status: 1=成功, -1=失败, 0=进行中
-				if status == 1 || status < 0 {
+				// 记录最新进度（无论是否完成）
+				if progress != "" {
+					lastProgress[taskID] = progress
+				}
+
+				// 状态判断：
+				// status=200 + progress="改机完成" = 真正完成，进入等待上线
+				// status=1 + progress="" = 可能是缓存的旧状态（秒返回），暂时认为成功但需要验证
+				// status<0 = 失败
+				// status=2,3等 = 进行中
+				if status == 200 && strings.Contains(progress, "改机完成") {
+					// 真正改机完成，进入等待上线状态
+					if !waitingOnline[deviceID] {
+						waitingOnline[deviceID] = true
+						logger.Info("  设备 %d (%s) 改机完成，等待上线...", deviceID, info.UUID)
+					}
+				} else if status == 1 && progress == "" {
+					// 可能是缓存的旧状态，先标记为成功
 					completedTasks[taskID] = true
 					taskResults[taskID] = struct {
 						status   int
 						progress string
-					}{status, s.Progress}
+					}{status, "秒完成(可能是缓存)"}
+					logger.Info("  ✓ 设备 %d (%s) 秒完成", deviceID, info.UUID)
+				} else if status < 0 {
+					completedTasks[taskID] = true
+					taskResults[taskID] = struct {
+						status   int
+						progress string
+					}{status, progress}
+					logger.Error("  ✗ 设备 %d (%s) 失败: %s", deviceID, info.UUID, progress)
 				}
 			}
 		}
 
-		// 显示进度
-		completed := len(completedTasks)
-		total := len(taskIDs)
-		logger.Info("进度: %d/%d (%.1f%%)", completed, total, float64(completed)*100/float64(total))
+		// 统计当前待处理数量
+		pendingCount := len(taskIDs) - len(completedTasks)
+
+		// 每 10 次轮询输出所有待处理设备的详细状态
+		if pollCount%10 == 0 && pendingCount > 0 {
+			logger.Info("========== 待处理设备详情 (%d 台) ==========", pendingCount)
+			for taskID, deviceID := range taskMap {
+				if completedTasks[taskID] {
+					continue
+				}
+				info := deviceInfoMap[deviceID]
+				progressStr := lastProgress[taskID]
+				if progressStr == "" {
+					progressStr = "无进度信息"
+				}
+				statusNote := ""
+				if waitingOnline[deviceID] {
+					statusNote = " [等待上线]"
+				}
+				logger.Info("  设备 %d | %s | %s%s", deviceID, info.UUID, progressStr, statusNote)
+			}
+			logger.Info("==========================================")
+		}
+
+		// 每 3 次轮询显示总进度
+		if pollCount%3 == 0 {
+			completed := len(completedTasks)
+			total := len(taskIDs)
+			logger.Info("[第 %d 轮] 进度: %d/%d (%.1f%%)", round, completed, total, float64(completed)*100/float64(total))
+		}
 
 		if len(completedTasks) == len(taskIDs) {
 			break
 		}
 
-		time.Sleep(3 * time.Second)
+		time.Sleep(5 * time.Second)
 	}
 
 	// 统计结果
+	var failedDevices []DeviceResult
 	for taskID, deviceID := range taskMap {
 		info := deviceInfoMap[deviceID]
 		result := DeviceResult{
@@ -337,23 +526,39 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 			if r.status == 1 {
 				result.Success = true
 				success++
-				logger.Info("设备 %d (%s) 改机成功", deviceID, info.UUID)
 			} else {
 				result.Success = false
 				result.Error = r.progress
 				failed++
-				logger.Error("设备 %d (%s) 改机失败: %s", deviceID, info.UUID, r.progress)
+				failedDevices = append(failedDevices, result)
 			}
 		} else {
+			// 超时未完成，尝试获取最后的进度信息
+			lastMsg := lastProgress[taskID]
+			if lastMsg == "" {
+				lastMsg = "无进度信息"
+			}
+			if waitingOnline[deviceID] {
+				lastMsg = "改机完成但设备未上线"
+			}
 			result.Success = false
-			result.Error = "超时未完成"
+			result.Error = fmt.Sprintf("超时未完成 (%s)", lastMsg)
 			failed++
-			logger.Error("设备 %d (%s) 改机超时", deviceID, info.UUID)
+			failedDevices = append(failedDevices, result)
 		}
 
 		results = append(results, result)
 	}
 
-	logger.Info("本轮改机完成: 成功=%d, 失败=%d", success, failed)
+	// 只输出失败设备汇总
+	if len(failedDevices) > 0 {
+		logger.Error("========== 失败设备 (%d 台) ==========", len(failedDevices))
+		for _, d := range failedDevices {
+			logger.Error("  设备 %d | %s | %s | %s", d.DeviceID, d.UUID, d.IP, d.Error)
+		}
+		logger.Error("======================================")
+	}
+
+	logger.Info("[第 %d 轮] 完成: 成功=%d, 失败=%d", round, success, failed)
 	return success, failed, results
 }
