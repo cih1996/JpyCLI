@@ -114,13 +114,21 @@ func newPushCmd() *cobra.Command {
 
 			client := &http.Client{Timeout: time.Duration(timeout) * time.Second}
 			resp, err := client.Do(req)
+
+			// 先等待写入完成，获取可能的写入错误
+			writeErr := <-errCh
+
 			if err != nil {
+				// 如果是写入错误导致的请求失败，优先报告写入错误
+				if writeErr != nil {
+					return fmt.Errorf("上传失败: %v", writeErr)
+				}
 				return fmt.Errorf("上传失败: %v", err)
 			}
 			defer resp.Body.Close()
 
 			// 检查写入错误
-			if writeErr := <-errCh; writeErr != nil {
+			if writeErr != nil {
 				return fmt.Errorf("写入数据失败: %v", writeErr)
 			}
 
