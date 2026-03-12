@@ -332,9 +332,17 @@ func flashDevice(task FlashTask) FlashResult {
 }
 
 func checkDevice(ip string) (bool, string) {
-	cmd := exec.Command(jpyPath, "device", "list",
-		"-s", middleware, "-u", user, "-p", pass,
-		"--ip", ip, "-o", "json")
+	var cmd *exec.Cmd
+	if remoteAddr != "" {
+		// 远程模式：通过 --remote 转发
+		cmd = exec.Command(jpyPath, "--remote", remoteAddr, "device", "list",
+			"-s", middleware, "-u", user, "-p", pass,
+			"--ip", ip, "-o", "json")
+	} else {
+		cmd = exec.Command(jpyPath, "device", "list",
+			"-s", middleware, "-u", user, "-p", pass,
+			"--ip", ip, "-o", "json")
+	}
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -354,9 +362,17 @@ func checkDevice(ip string) (bool, string) {
 }
 
 func rebootBootloader(ip string) error {
-	cmd := exec.Command(jpyPath, "device", "shell", "reboot bootloader",
-		"-s", middleware, "-u", user, "-p", pass,
-		"--ip", ip)
+	var cmd *exec.Cmd
+	if remoteAddr != "" {
+		// 远程模式：通过 --remote 转发
+		cmd = exec.Command(jpyPath, "--remote", remoteAddr, "device", "shell", "reboot bootloader",
+			"-s", middleware, "-u", user, "-p", pass,
+			"--ip", ip)
+	} else {
+		cmd = exec.Command(jpyPath, "device", "shell", "reboot bootloader",
+			"-s", middleware, "-u", user, "-p", pass,
+			"--ip", ip)
+	}
 	return cmd.Run()
 }
 
