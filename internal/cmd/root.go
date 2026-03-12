@@ -6,6 +6,7 @@ import (
 	"jpy-cli/internal/cmd/device"
 	"jpy-cli/internal/cmd/file"
 	"jpy-cli/internal/cmd/flash"
+	"jpy-cli/internal/cmd/stress"
 	"jpy-cli/pkg/logger"
 	"os"
 	"path/filepath"
@@ -71,6 +72,7 @@ func Execute() {
 	rootCmd.AddCommand(com.NewComCmd())
 	rootCmd.AddCommand(flash.NewFlashCmd())
 	rootCmd.AddCommand(file.NewFileCmd())
+	rootCmd.AddCommand(stress.NewStressCmd())
 	rootCmd.AddCommand(newServerCmd())
 	rootCmd.AddCommand(newShellCmd())
 	rootCmd.AddCommand(newVersionCmd())
