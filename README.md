@@ -121,6 +121,36 @@ jpy file pull "https://example.com/rom.zip" --remote 192.168.1.100:9090 --dest D
 jpy file push ./large.zip --remote 192.168.1.100:9090 --timeout 3600
 ```
 
+### 6. Stress - 压力测试
+
+用户端改机压力测试，一行命令执行，无交互式 TUI。
+
+```bash
+# 测试所有设备，单次
+jpy stress user -s wss://home.accjs.cn/ws -k YOUR_SECRET_KEY -c config.json
+
+# 测试指定设备，循环3次，间隔5分钟
+jpy stress user -k YOUR_SECRET_KEY -c config.json --device 123,456,789 --loop 3 --interval 5m
+
+# 无限循环测试
+jpy stress user -k YOUR_SECRET_KEY -c config.json --loop 0 --interval 3m
+
+# 自定义超时和日志目录
+jpy stress user -k YOUR_SECRET_KEY -c config.json --timeout 15m --log-dir /var/log/stress
+```
+
+**参数说明：**
+- `-s, --server`: WebSocket 服务地址（默认 wss://home.accjs.cn/ws）
+- `-k, --key`: 登录密钥（必填）
+- `-c, --config`: 改机配置文件路径（必填，JSON 格式）
+- `--device`: 指定设备 ID 列表（逗号分隔），不指定则测试所有设备
+- `--loop`: 循环次数（0=无限循环，默认 1）
+- `--interval`: 循环间隔时间（默认 3m）
+- `--timeout`: 单轮超时时间（默认 10m）
+- `--log-dir`: 日志目录（默认 ~/.jpy/logs/stress）
+
+**日志文件：** 独立记录到 `~/.jpy/logs/stress/stress_user_YYYYMMDD_HHMMSS.log`，不受 SDK 内部日志干扰。
+
 ## 远程模式
 
 启动 server 后，可通过 `--remote` 参数远程调用任意命令：
