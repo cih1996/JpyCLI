@@ -48,6 +48,12 @@ var rootCmd = &cobra.Command{
 }
 
 func Execute() {
+	// 无参数时进入自检模式
+	if len(os.Args) == 1 {
+		runSelfCheck()
+		return
+	}
+
 	// --remote 拦截：在 Cobra 解析之前检查，命中则转发到远端
 	// 注意：file/version 子命令有自己的 --remote 处理逻辑，不走全局拦截
 	if addr, args := extractRemoteFlag(os.Args[1:]); addr != "" {

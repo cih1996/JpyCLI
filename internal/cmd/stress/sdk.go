@@ -304,7 +304,10 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 		return 0, len(deviceIDs), nil
 	}
 
-	logger.Info("[第 %d 轮] 收到 %d 个任务 ID，开始轮询状态...", round, len(allResList))
+	logger.Info("[第 %d 轮] 收到 %d 个任务 ID，等待 10 秒后开始轮询...", round, len(allResList))
+
+	// 等待 10 秒，避免拉到缓存的旧状态（秒完成问题）
+	time.Sleep(10 * time.Second)
 
 	// 构建任务映射
 	taskMap := make(map[int64]int64) // changeOsID -> deviceID
@@ -455,14 +458,6 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 						waitingOnline[deviceID] = true
 						logger.Info("  设备 %d (%s) 改机完成，等待上线...", deviceID, info.UUID)
 					}
-				} else if status == 1 && progress == "" {
-					// 可能是缓存的旧状态，先标记为成功
-					completedTasks[taskID] = true
-					taskResults[taskID] = struct {
-						status   int
-						progress string
-					}{status, "秒完成(可能是缓存)"}
-					logger.Info("  ✓ 设备 %d (%s) 秒完成", deviceID, info.UUID)
 				} else if status < 0 {
 					completedTasks[taskID] = true
 					taskResults[taskID] = struct {

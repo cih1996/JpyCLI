@@ -162,6 +162,7 @@ func newServerCmd() *cobra.Command {
 
 			mux := http.NewServeMux()
 			mux.HandleFunc("/exec", makeExecHandler(self))
+			mux.HandleFunc("/exec/async", makeExecAsyncHandler(self, tm))
 			mux.HandleFunc("/shell", makeShellHandler(self))
 			mux.HandleFunc("/shell/async", makeShellAsyncHandler(self, tm))
 			mux.HandleFunc("/shell/task", makeShellTaskHandler(tm))
@@ -232,6 +233,82 @@ func makeExecHandler(selfPath string) http.HandlerFunc {
 
 		writeJSON(w, http.StatusOK, execResponse{
 			ExitCode: exitCode, Stdout: stdout.String(), Stderr: stderr.String(),
+		})
+	}
+}
+
+// --- 异步 /exec/async（异步执行 CLI 命令） ---
+
+func makeExecAsyncHandler(selfPath string, tm *taskManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
+		var req struct {
+			Args    []string `json:"args"`
+			Timeout int      `json:"timeout"` // 秒，0=默认600
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+
+		if err := validateArgs(req.Args); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+
+		timeout := 600 * time.Second // 默认 10 分钟
+		if req.Timeout > 0 {
+			timeout = time.Duration(req.Timeout) * time.Second
+		}
+
+		// 构建命令字符串用于显示
+		cmdStr := selfPath + " " + strings.Join(req.Args, " ")
+		task := tm.create(cmdStr)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		task.cancel = cancel
+
+		go func() {
+			defer cancel()
+
+			cmd := exec.CommandContext(ctx, selfPath, req.Args...)
+			task.mu.Lock()
+			cmd.Stdout = &task.stdout
+			cmd.Stderr = &task.stderr
+			task.mu.Unlock()
+
+			err := cmd.Run()
+
+			task.mu.Lock()
+			defer task.mu.Unlock()
+			task.EndTime = time.Now()
+
+			if err != nil {
+				if ctx.Err() == context.DeadlineExceeded {
+					task.Status = "failed"
+					task.ExitCode = 124
+					task.stderr.WriteString(fmt.Sprintf("\n命令超时 (%v)", timeout))
+				} else if exitErr, ok := err.(*exec.ExitError); ok {
+					task.Status = "done"
+					task.ExitCode = exitErr.ExitCode()
+				} else {
+					task.Status = "failed"
+					task.ExitCode = 1
+					task.stderr.WriteString(fmt.Sprintf("\nexec error: %v", err))
+				}
+			} else {
+				task.Status = "done"
+				task.ExitCode = 0
+			}
+		}()
+
+		writeJSON(w, http.StatusOK, asyncResponse{
+			TaskID: task.ID, Status: "running",
 		})
 	}
 }

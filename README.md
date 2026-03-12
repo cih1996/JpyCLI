@@ -164,6 +164,67 @@ jpy --remote 192.168.1.100:9090 device list -s 192.168.1.1 -u admin -p 123456
 jpy --remote 192.168.1.100:9090 com list
 ```
 
+## 自检模式
+
+无参数运行 `jpy` 进入自检模式，检测并配置 FRPC 内网穿透：
+
+```bash
+jpy
+# 输出：
+# ========================================
+#        JPY CLI 自检模式
+# ========================================
+# [1] FRPC 程序路径: ~/.jpy/frpc/frpc
+#     状态: 已安装
+# [2] FRPC 配置文件: ~/.jpy/frpc/frpc.ini
+#     状态: 已配置
+# [3] FRPC 运行状态: 运行中
+# [4] 本地 9090 端口: 可用
+```
+
+首次运行会引导配置 FRPC（服务器地址、端口、密钥、远程映射端口）。
+
+## HTTP 接口
+
+server 模式提供完整的 HTTP API，支持纯 HTTP 调用（无需本地安装 CLI）：
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| /health | GET | 健康检查 |
+| /version | GET | 版本信息 |
+| /exec | POST | 执行 CLI 命令（同步） |
+| /exec/async | POST | 执行 CLI 命令（异步） |
+| /shell | POST | 执行系统命令（同步） |
+| /shell/async | POST | 执行系统命令（异步） |
+| /shell/task | GET | 查询异步任务 |
+| /shell/tasks | GET | 列出所有任务 |
+| /shell/kill | GET | 终止任务 |
+| /file/upload | POST | 上传文件 |
+| /file/download | POST | 下载文件 |
+
+示例：
+
+```bash
+# 健康检查
+curl http://192.168.1.100:9090/health
+
+# 执行 CLI 命令（同步）
+curl -X POST http://192.168.1.100:9090/exec \
+  -H "Content-Type: application/json" \
+  -d '{"args": ["device", "list", "-s", "xxx", "-u", "xxx", "-p", "xxx"]}'
+
+# 执行 CLI 命令（异步，适合长时间任务）
+curl -X POST http://192.168.1.100:9090/exec/async \
+  -H "Content-Type: application/json" \
+  -d '{"args": ["stress", "user", "-k", "xxx", "-c", "/path/config.json", "--loop", "0"], "timeout": 86400}'
+
+# 查询任务状态
+curl http://192.168.1.100:9090/shell/task?id=abc123
+
+# 终止任务
+curl http://192.168.1.100:9090/shell/kill?id=abc123
+```
+
 ## 输出格式
 
 所有命令支持 `-o plain`（默认）和 `-o json` 两种输出模式。
