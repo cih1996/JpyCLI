@@ -55,10 +55,10 @@ func Execute() {
 	}
 
 	// --remote 拦截：在 Cobra 解析之前检查，命中则转发到远端
-	// 注意：file/version 子命令有自己的 --remote 处理逻辑，不走全局拦截
+	// 注意：file/version/update 子命令有自己的 --remote 处理逻辑，不走全局拦截
 	if addr, args := extractRemoteFlag(os.Args[1:]); addr != "" {
-		// file/version 子命令不走全局拦截，它们的 --remote 是目标服务器地址
-		if len(args) > 0 && (args[0] == "file" || args[0] == "version") {
+		// file/version/update 子命令不走全局拦截，它们的 --remote 是目标服务器地址
+		if len(args) > 0 && (args[0] == "file" || args[0] == "version" || args[0] == "update") {
 			// 跳过拦截，让 Cobra 正常解析
 		} else if len(args) > 0 && args[0] == "shell" {
 			// shell 子命令走专用远程处理
@@ -82,6 +82,7 @@ func Execute() {
 	rootCmd.AddCommand(newServerCmd())
 	rootCmd.AddCommand(newShellCmd())
 	rootCmd.AddCommand(newVersionCmd())
+	rootCmd.AddCommand(newUpdateCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)

@@ -55,9 +55,12 @@ jpy com devices --port COM3 -o json
 
 # 设置通道模式（HUB/OTG）
 jpy com set-mode --port COM3 --mode hub --channel 5
+jpy com set-mode --port COM3 --mode otg --channel 2-20  # 范围
+jpy com set-mode --port COM3 --mode hub --channel 1,2,3  # 列表
 
 # 重启通道
 jpy com restart --port COM3 --channel 3
+jpy com restart --port COM3 --channel 2-20  # 范围
 ```
 
 ### 3. Shell - 远程系统命令
@@ -86,18 +89,20 @@ jpy shell --remote 192.168.1.100:9090 --kill <task_id>
 集成 device + com 操作，实现批量刷机自动化。
 
 ```bash
-# 刷 COM4 所有通道
-jpy flash run --com COM4 --mw 192.168.255.2 --script D:\flash\flash.cmd -y
+# 刷 COM3 通道1（IP: 172.25.0.11）
+jpy flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 10 --script D:\flash\flash.cmd -y
 
-# 刷指定通道范围
-jpy flash run --com COM4 --ch 1-10 --mw 192.168.255.2 --script D:\flash\flash.cmd
+# 刷 COM3 的 1-10 通道（IP: 172.25.0.11-20）
+jpy flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 10 --script D:\flash\flash.cmd
 
 # 远程刷机（COM口在远程机器上）
-jpy flash run --remote 192.168.1.100:9090 --com COM4 --mw 192.168.255.2 --script D:\flash\flash.cmd
+jpy flash run --remote 192.168.1.100:9090 --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 10 --script D:\flash\flash.cmd
 
-# 模拟运行
-jpy flash run --com COM4 --mw 192.168.255.2 --script D:\flash\flash.cmd --dry
+# 模拟运行（查看 IP 映射）
+jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 10 --script D:\flash\flash.cmd --dry
 ```
+
+**IP 计算规则：** `{ip-prefix}.{ip-offset + 通道号}`
 
 **工作流程：**
 1. 检查设备状态

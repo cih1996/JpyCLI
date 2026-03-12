@@ -1,6 +1,6 @@
 # JPY CLI — AI Tool Reference
 
-> 版本：v5.0 | 更新：2026-03-11
+> 版本：v5.1 | 更新：2026-03-13
 > 本文档专为 AI Agent 设计，提供精确的命令签名、参数约束、输出 schema。
 
 ## 全局约束
@@ -639,7 +639,7 @@ jpy com devices --port COM3 --skip-connect -o json
 ### 签名
 
 ```
-jpy com set-mode --port <串口名> --mode <hub|otg> [--channel <N>] [--skip-connect] [-o plain|json]
+jpy com set-mode --port <串口名> --mode <hub|otg> [--channel <通道>] [--skip-connect] [-o plain|json]
 ```
 
 ### 参数
@@ -648,7 +648,7 @@ jpy com set-mode --port <串口名> --mode <hub|otg> [--channel <N>] [--skip-con
 |------|------|--------|------|------|
 | `--port` | string | `""` | 否 | 串口名称 |
 | `--mode` | string | — | 是 | `hub` 或 `otg` |
-| `--channel` | int | `0` | 否 | 通道号（0=所有通道，1-20=指定通道） |
+| `--channel` | string | `0` | 否 | 通道: 单个(1)、列表(1,2,3)、范围(2-20)、所有(0) |
 | `--skip-connect` | bool | `false` | 否 | 跳过建连 |
 
 ### plain 输出格式
@@ -662,7 +662,7 @@ COM3	0	OK
 ### JSON 输出 schema
 
 ```json
-{"port": "COM3", "channel": 0, "success": true, "message": "已设置为 hub 模式"}
+{"port": "COM3", "channels": [2,3,4], "mode": "hub", "total": 3, "success": 3, "failed": 0, "results": [...]}
 ```
 
 ### 示例
@@ -671,8 +671,14 @@ COM3	0	OK
 # 所有通道切 HUB
 jpy com set-mode --port COM3 --mode hub
 
-# 通道 5 切 OTG
+# 单个通道切 OTG
 jpy com set-mode --port COM3 --mode otg --channel 5
+
+# 多个通道切 HUB
+jpy com set-mode --port COM3 --mode hub --channel 1,2,3
+
+# 通道范围切 OTG
+jpy com set-mode --port COM3 --mode otg --channel 2-20
 
 # JSON 输出
 jpy com set-mode --port COM3 --mode hub -o json
@@ -687,7 +693,7 @@ jpy com set-mode --port COM3 --mode hub -o json
 ### 签名
 
 ```
-jpy com restart --port <串口名> [--channel <N>] [--skip-connect] [-o plain|json]
+jpy com restart --port <串口名> [--channel <通道>] [--skip-connect] [-o plain|json]
 ```
 
 ### 参数
@@ -695,7 +701,7 @@ jpy com restart --port <串口名> [--channel <N>] [--skip-connect] [-o plain|js
 | 参数 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
 | `--port` | string | `""` | 否 | 串口名称 |
-| `--channel` | int | `0` | 否 | 通道号（0=所有通道，1-20=指定通道） |
+| `--channel` | string | `0` | 否 | 通道: 单个(1)、列表(1,2,3)、范围(2-20)、所有(0) |
 | `--skip-connect` | bool | `false` | 否 | 跳过建连 |
 
 ### plain 输出格式
@@ -709,7 +715,7 @@ COM3	0	OK
 ### JSON 输出 schema
 
 ```json
-{"port": "COM3", "channel": 0, "success": true, "message": "重启成功"}
+{"port": "COM3", "channels": [2,3,4], "total": 3, "success": 3, "failed": 0, "results": [...]}
 ```
 
 ### 示例
@@ -718,11 +724,17 @@ COM3	0	OK
 # 重启所有通道
 jpy com restart --port COM3
 
-# 重启通道 3
+# 重启单个通道
 jpy com restart --port COM3 --channel 3
 
+# 重启多个通道
+jpy com restart --port COM3 --channel 1,2,3
+
+# 重启通道范围
+jpy com restart --port COM3 --channel 2-20
+
 # 远程重启
-jpy --remote 10.0.0.5:9090 com restart --port COM3
+jpy --remote 10.0.0.5:9090 com restart --port COM3 --channel 2-20
 ```
 
 ---
@@ -832,7 +844,7 @@ jpy shell --remote 10.0.0.5:9090 --task a1b2c3d4e5f6
 ### 签名
 
 ```
-jpy flash run --com <COM口> --mw <中间件> --script <脚本路径> [--ch <通道>] [--ip-base <IP基数>] [--dry] [-y] [-o plain|json]
+jpy flash run --com <COM口> --mw <中间件> --ip-prefix <IP前缀> --ip-offset <IP偏移> --script <脚本路径> [--ch <通道>] [--dry] [-y] [-o plain|json]
 ```
 
 ### 参数
@@ -841,9 +853,10 @@ jpy flash run --com <COM口> --mw <中间件> --script <脚本路径> [--ch <通
 |------|------|------|--------|------|------|
 | `--com` | — | string | — | 是 | COM口: COM3, COM4, COM6 或 all |
 | `--mw` | — | string | — | 是 | 中间件地址 |
+| `--ip-prefix` | — | string | — | 是 | IP 前缀（如 172.25.0 或 192.168.11） |
+| `--ip-offset` | — | int | — | 是 | IP 偏移量（设备IP = ip-prefix.(ip-offset + 通道号 - 1)，即 ip-offset 是通道1的起始IP） |
 | `--script` | — | string | — | 是 | 刷机脚本路径 |
 | `--ch` | — | string | `all` | 否 | 通道: 1,2,3 或 1-20 或 all |
-| `--ip-base` | — | string | `11` | 否 | IP 基数（如 11 表示 192.168.11.x） |
 | `--user` | `-u` | string | `admin` | 否 | 中间件用户名 |
 | `--pass` | `-p` | string | `admin` | 否 | 中间件密码 |
 | `--timeout` | — | int | `600` | 否 | 单台刷机超时(秒) |
@@ -854,13 +867,15 @@ jpy flash run --com <COM口> --mw <中间件> --script <脚本路径> [--ch <通
 | `--remote` | — | string | `""` | 否 | 远程 jpy server 地址（COM口在远程时使用） |
 | `--jpy` | — | string | `jpy` | 否 | jpy工具路径 |
 
-### COM 口与 IP 映射规则
+### IP 计算规则
 
-| COM口 | IP偏移 | 通道1 IP | 通道20 IP |
-|-------|--------|----------|-----------|
-| COM3 | 0 | 192.168.11.1 | 192.168.11.20 |
-| COM4 | 20 | 192.168.11.21 | 192.168.11.40 |
-| COM6 | 40 | 192.168.11.41 | 192.168.11.60 |
+设备 IP = `{ip-prefix}.{ip-offset + 通道号 - 1}`
+
+即 `ip-offset` 是通道1的起始IP。
+
+示例：
+- `--ip-prefix 172.25.0 --ip-offset 11 --ch 1` => IP: 172.25.0.11
+- `--ip-prefix 172.25.0 --ip-offset 11 --ch 3` => IP: 172.25.0.13
 
 ### 工作流程
 
@@ -888,9 +903,9 @@ jpy flash run --com <COM口> --mw <中间件> --script <脚本路径> [--ch <通
 {
   "results": [
     {
-      "com": "COM4",
+      "com": "COM3",
       "channel": 1,
-      "ip": "11.21",
+      "ip": "172.25.0.11",
       "uuid": "abc-123",
       "success": true,
       "error": "",
@@ -904,29 +919,23 @@ jpy flash run --com <COM口> --mw <中间件> --script <脚本路径> [--ch <通
 ### 示例
 
 ```bash
-# 刷 COM4 所有通道
-jpy flash run --com COM4 --mw 192.168.255.2 --script D:\flash\flash.cmd
+# 刷 COM3 通道1（IP: 172.25.0.11）
+jpy flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd
 
-# 刷 COM4 的 1-10 通道
-jpy flash run --com COM4 --ch 1-10 --mw 192.168.255.2 --script D:\flash\flash.cmd
+# 刷 COM3 的 1-10 通道（IP: 172.25.0.11-20）
+jpy flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd
 
-# 刷 COM3,COM4 的 1,2,3 通道
-jpy flash run --com COM3,COM4 --ch 1,2,3 --mw 192.168.255.2 --script D:\flash\flash.cmd
+# 刷指定通道 1,3,5（IP: 172.25.0.11, 13, 15）
+jpy flash run --com COM3 --ch 1,3,5 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd
 
-# 模拟运行（不实际执行）
-jpy flash run --com COM4 --mw 192.168.255.2 --script D:\flash\flash.cmd --dry
-
-# 跳过确认直接执行
-jpy flash run --com COM4 --mw 192.168.255.2 --script D:\flash\flash.cmd -y
+# 模拟运行（查看 IP 映射，不实际执行）
+jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd --dry
 
 # 远程执行（COM口在远程机器上）
-jpy flash run --remote 192.168.1.100:9090 --com COM4 --mw 192.168.255.2 --script D:\flash\flash.cmd
-
-# 自定义 IP 基数（如 192.168.12.x）
-jpy flash run --com COM4 --mw 192.168.255.2 --script D:\flash\flash.cmd --ip-base 12
+jpy flash run --remote 192.168.1.100:9090 --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd
 
 # JSON 输出
-jpy flash run --com COM4 --ch 1-3 --mw 192.168.255.2 --script D:\flash\flash.cmd -y -o json
+jpy flash run --com COM3 --ch 1-3 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd -y -o json
 ```
 
 ---
