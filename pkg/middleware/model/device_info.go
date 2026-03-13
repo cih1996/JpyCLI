@@ -7,6 +7,7 @@ type DeviceInfo struct {
 	UUID        string
 	Model       string
 	Android     string
+	OSVersion   string // 系统包版本（ROM 版本）
 	IsOnline    bool
 	BizOnline   bool
 	IP          string

@@ -138,6 +138,7 @@ func ProcessResults(rawResults []interface{}) ([]model.DeviceInfo, int) {
 				UUID:        d.UUID,
 				Model:       d.Model,
 				Android:     androidVer,
+				OSVersion:   d.OSVersion,
 				IsOnline:    false,
 				ServerIndex: res.OrderIndex,
 			}

@@ -77,12 +77,12 @@ func NewListCmd() *cobra.Command {
 
 func printListPlain(devices []model.DeviceInfo) {
 	// Header
-	fmt.Println("SERVER\tSEAT\tUUID\tMODEL\tANDROID\tONLINE\tBIZ\tIP\tADB\tUSB")
+	fmt.Println("SERVER\tSEAT\tUUID\tMODEL\tANDROID\tOS_VER\tONLINE\tBIZ\tIP\tADB\tUSB")
 	for _, d := range devices {
 		cleanURL := strings.TrimPrefix(d.ServerURL, "https://")
 		cleanURL = strings.TrimPrefix(cleanURL, "http://")
-		fmt.Printf("%s\t%d\t%s\t%s\t%s\t%v\t%v\t%s\t%v\t%v\n",
-			cleanURL, d.Seat, d.UUID, d.Model, d.Android,
+		fmt.Printf("%s\t%d\t%s\t%s\t%s\t%s\t%v\t%v\t%s\t%v\t%v\n",
+			cleanURL, d.Seat, d.UUID, d.Model, d.Android, d.OSVersion,
 			d.IsOnline, d.BizOnline, d.IP, d.ADBEnabled, d.USBMode)
 	}
 	fmt.Printf("--- total: %d\n", len(devices))
@@ -90,16 +90,17 @@ func printListPlain(devices []model.DeviceInfo) {
 
 func printListJSON(devices []model.DeviceInfo) {
 	type jsonDevice struct {
-		Server  string `json:"server"`
-		Seat    int    `json:"seat"`
-		UUID    string `json:"uuid"`
-		Model   string `json:"model"`
-		Android string `json:"android"`
-		Online  bool   `json:"online"`
-		Biz     bool   `json:"biz_online"`
-		IP      string `json:"ip"`
-		ADB     bool   `json:"adb"`
-		USB     bool   `json:"usb"`
+		Server    string `json:"server"`
+		Seat      int    `json:"seat"`
+		UUID      string `json:"uuid"`
+		Model     string `json:"model"`
+		Android   string `json:"android"`
+		OSVersion string `json:"os_version"`
+		Online    bool   `json:"online"`
+		Biz       bool   `json:"biz_online"`
+		IP        string `json:"ip"`
+		ADB       bool   `json:"adb"`
+		USB       bool   `json:"usb"`
 	}
 	type jsonOut struct {
 		Total   int          `json:"total"`
@@ -109,16 +110,17 @@ func printListJSON(devices []model.DeviceInfo) {
 	out := jsonOut{Total: len(devices)}
 	for _, d := range devices {
 		out.Devices = append(out.Devices, jsonDevice{
-			Server:  d.ServerURL,
-			Seat:    d.Seat,
-			UUID:    d.UUID,
-			Model:   d.Model,
-			Android: d.Android,
-			Online:  d.IsOnline,
-			Biz:     d.BizOnline,
-			IP:      d.IP,
-			ADB:     d.ADBEnabled,
-			USB:     d.USBMode,
+			Server:    d.ServerURL,
+			Seat:      d.Seat,
+			UUID:      d.UUID,
+			Model:     d.Model,
+			Android:   d.Android,
+			OSVersion: d.OSVersion,
+			Online:    d.IsOnline,
+			Biz:       d.BizOnline,
+			IP:        d.IP,
+			ADB:       d.ADBEnabled,
+			USB:       d.USBMode,
 		})
 	}
 	b, _ := json.Marshal(out)
