@@ -1,6 +1,6 @@
 # JPY CLI — AI Tool Reference
 
-> 版本：v5.2 | 更新：2026-03-13
+> 版本：v5.3 | 更新：2026-03-14
 > 本文档专为 AI Agent 设计，提供精确的命令签名、参数约束、输出 schema。
 
 ## 全局约束
@@ -57,8 +57,8 @@ jpy device list -s <server> -u <user> -p <pass> [--ip <ip>] [--uuid <uuid>] [--s
 ### plain 输出格式
 
 ```
-SERVER\tSEAT\tUUID\tMODEL\tANDROID\tONLINE\tBIZ\tIP\tADB\tUSB
-192.168.1.1\t1\tabc-123\tPixel 6\t13\ttrue\ttrue\t10.0.0.5\ttrue\tfalse
+SERVER\tSEAT\tUUID\tMODEL\tANDROID\tOS_VER\tONLINE\tBIZ\tIP\tADB\tUSB
+192.168.1.1\t1\tabc-123\tPixel 6\t13\t8se_v2.1.0\ttrue\ttrue\t10.0.0.5\ttrue\tfalse
 --- total: 1
 ```
 
@@ -79,6 +79,7 @@ SERVER\tSEAT\tUUID\tMODEL\tANDROID\tONLINE\tBIZ\tIP\tADB\tUSB
       "uuid": "abc-123",
       "model": "Pixel 6",
       "android": "13",
+      "os_version": "8se_v2.1.0",
       "online": true,
       "biz_online": true,
       "ip": "10.0.0.5",
@@ -1227,4 +1228,140 @@ jpy file pull "https://example.com/rom.zip" --remote 192.168.1.100:9090 --timeou
 
 # JSON 输出
 jpy file pull "https://example.com/rom.zip" --remote 192.168.1.100:9090 -o json
+```
+
+---
+
+## 命令 16：update
+
+更新远程 jpy CLI 程序。支持从本地文件上传（分片上传，适合 FRPC 隧道）或从 URL 下载。
+
+### 签名
+
+```
+jpy update <本地文件路径|远程URL> --remote <host:port>
+```
+
+### 参数
+
+| 参数 | 短写 | 类型 | 默认值 | 必填 | 说明 |
+|------|------|------|--------|------|------|
+| 位置参数 | — | string | — | 是 | 本地文件路径或远程 URL |
+| `--remote` | — | string | — | 是 | 远程 jpy server 地址 |
+
+### 更新方式
+
+1. **本地文件上传**：使用 1MB 分片上传，适合通过 FRPC 隧道传输大文件
+2. **远程 URL 下载**：让远程服务器直接从 URL 下载新版本
+
+### 更新流程
+
+1. 下载/上传新版本到临时目录
+2. 验证新版本可执行
+3. 替换当前程序（Windows 使用延迟替换）
+4. 重启服务（如果在 server 模式运行）
+
+### 输出格式
+
+```
+正在上传文件到远程服务器（分片上传）...
+  本地文件: ./jpy-windows-amd64.exe
+  文件大小: 15.23 MB
+  分片数量: 16
+  远程地址: http://192.168.1.100:9090
+  会话 ID: abc123
+  进度: 16/16 (100.0%)
+  上传完成: C:\Users\xxx\AppData\Local\Temp\jpy-update-1710403200.exe
+正在执行更新...
+  当前程序路径: C:\jpy\jpy.exe
+  新版本路径: C:\Users\xxx\AppData\Local\Temp\jpy-update-1710403200.exe
+
+========== 更新已启动 ==========
+任务 ID: def456
+远程服务将在 2 秒后重启...
+请稍后检查远程服务状态：
+  curl http://192.168.1.100:9090/health
+  curl http://192.168.1.100:9090/version
+```
+
+### 示例
+
+```bash
+# 从本地文件更新远程（分片上传）
+jpy update ./jpy-windows-amd64.exe --remote 192.168.1.100:9090
+
+# 从 URL 更新远程（远程直接下载）
+jpy update https://github.com/xxx/releases/download/v1.5.0/jpy-windows-amd64.exe --remote 192.168.1.100:9090
+```
+
+---
+
+## HTTP API：分片上传
+
+用于大文件上传，特别适合通过 FRPC 隧道传输。
+
+### POST /file/chunk/init
+
+初始化分片上传会话。
+
+请求：
+```json
+{
+  "filename": "jpy-update.exe",
+  "dest": "jpy-update-1710403200.exe",
+  "total_size": 15970304,
+  "chunk_size": 1048576,
+  "total_chunk": 16
+}
+```
+
+响应：
+```json
+{
+  "success": true,
+  "session_id": "abc123"
+}
+```
+
+### POST /file/chunk/upload
+
+上传单个分片。使用 multipart/form-data 格式。
+
+表单字段：
+- `session_id`: 会话 ID
+- `chunk_index`: 分片索引（从 0 开始）
+- `chunk`: 分片数据（文件）
+
+响应：
+```json
+{
+  "success": true
+}
+```
+
+### POST /file/chunk/complete
+
+完成分片上传，合并所有分片。
+
+请求：
+```json
+{
+  "session_id": "abc123"
+}
+```
+
+响应：
+```json
+{
+  "success": true,
+  "path": "C:\\Users\\xxx\\AppData\\Local\\Temp\\jpy-update-1710403200.exe"
+}
+```
+
+### 分片上传流程
+
+```
+1. POST /file/chunk/init     → 获取 session_id
+2. POST /file/chunk/upload   → 循环上传每个分片
+3. POST /file/chunk/complete → 合并分片，获取最终路径
 ```
