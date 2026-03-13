@@ -121,6 +121,13 @@ IP 计算规则:
 }
 
 func runFlash(cmd *cobra.Command, args []string) error {
+	// 如果 jpyPath 是默认值 "jpy"，尝试使用当前可执行文件路径
+	if jpyPath == "jpy" {
+		if exe, err := os.Executable(); err == nil {
+			jpyPath = exe
+		}
+	}
+
 	printBanner()
 
 	// 解析任务

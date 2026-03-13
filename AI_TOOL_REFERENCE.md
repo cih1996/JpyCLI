@@ -1,6 +1,6 @@
 # JPY CLI — AI Tool Reference
 
-> 版本：v5.1 | 更新：2026-03-13
+> 版本：v5.2 | 更新：2026-03-13
 > 本文档专为 AI Agent 设计，提供精确的命令签名、参数约束、输出 schema。
 
 ## 全局约束
@@ -95,16 +95,16 @@ SERVER\tSEAT\tUUID\tMODEL\tANDROID\tONLINE\tBIZ\tIP\tADB\tUSB
 
 ```bash
 # 列出所有设备
-jpy device list -s 192.168.1.1 -u admin -p 123456
+jpy device list -s 192.168.1.1 -u admin -p admin
 
 # JSON 输出 + 按 IP 过滤
-jpy device list -s 192.168.1.1 -u admin -p 123456 -o json --ip 10.0.0
+jpy device list -s 192.168.1.1 -u admin -p admin -o json --ip 10.0.0
 
 # 只看前 5 台
-jpy device list -s 192.168.1.1 -u admin -p 123456 -l 5
+jpy device list -s 192.168.1.1 -u admin -p admin -l 5
 
 # 查指定机位
-jpy device list -s 192.168.1.1 -u admin -p 123456 --seat 3
+jpy device list -s 192.168.1.1 -u admin -p admin --seat 3
 ```
 
 ---
@@ -167,16 +167,16 @@ jpy device shell -c "<command>" -s <server> -u <user> -p <pass> --ip <ip> [-o pl
 
 ```bash
 # 按机位执行
-jpy device shell "ls -lh /sdcard" -s 192.168.1.1 -u admin -p 123456 --seat 3
+jpy device shell "ls -lh /sdcard" -s 192.168.1.1 -u admin -p admin --seat 3
 
 # 按 IP 执行
-jpy device shell "getprop ro.build.version.release" -s 192.168.1.1 -u admin -p 123456 --ip 10.0.0.5
+jpy device shell "getprop ro.build.version.release" -s 192.168.1.1 -u admin -p admin --ip 10.0.0.5
 
 # JSON 输出
-jpy device shell "df -h" -s 192.168.1.1 -u admin -p 123456 --seat 1 -o json
+jpy device shell "df -h" -s 192.168.1.1 -u admin -p admin --seat 1 -o json
 
 # 使用 -c 参数
-jpy device shell -c "pm list packages" -s 192.168.1.1 -u admin -p 123456 --seat 3
+jpy device shell -c "pm list packages" -s 192.168.1.1 -u admin -p admin --seat 3
 ```
 
 ---
@@ -230,13 +230,13 @@ SERVER\tSEAT\tUUID\tSTATUS
 
 ```bash
 # 重启指定机位
-jpy device reboot -s 192.168.1.1 -u admin -p 123456 --seat 3
+jpy device reboot -s 192.168.1.1 -u admin -p admin --seat 3
 
 # 重启所有设备
-jpy device reboot -s 192.168.1.1 -u admin -p 123456
+jpy device reboot -s 192.168.1.1 -u admin -p admin
 
 # JSON 输出
-jpy device reboot -s 192.168.1.1 -u admin -p 123456 --seat 3 -o json
+jpy device reboot -s 192.168.1.1 -u admin -p admin --seat 3 -o json
 ```
 
 ---
@@ -270,10 +270,10 @@ jpy device usb -s <server> -u <user> -p <pass> --mode <host|device> [--seat <n>]
 
 ```bash
 # 切换到 host 模式
-jpy device usb -s 192.168.1.1 -u admin -p 123456 --mode host --seat 3
+jpy device usb -s 192.168.1.1 -u admin -p admin --mode host --seat 3
 
 # 切换到 device 模式（所有设备）
-jpy device usb -s 192.168.1.1 -u admin -p 123456 --mode device
+jpy device usb -s 192.168.1.1 -u admin -p admin --mode device
 ```
 
 ---
@@ -307,10 +307,10 @@ jpy device adb -s <server> -u <user> -p <pass> --set <on|off> [--seat <n>] [--ip
 
 ```bash
 # 开启 ADB
-jpy device adb -s 192.168.1.1 -u admin -p 123456 --set on --seat 3
+jpy device adb -s 192.168.1.1 -u admin -p admin --set on --seat 3
 
 # 关闭所有设备 ADB
-jpy device adb -s 192.168.1.1 -u admin -p 123456 --set off
+jpy device adb -s 192.168.1.1 -u admin -p admin --set off
 ```
 
 ---
@@ -364,13 +364,13 @@ SERVER\tSTATUS\tLICENSE\tDEVICES\tBIZ\tIP\tADB\tUSB\tOTG
 
 ```bash
 # 基本状态
-jpy device status -s 192.168.1.1 -u admin -p 123456
+jpy device status -s 192.168.1.1 -u admin -p admin
 
 # 详细信息
-jpy device status -s 192.168.1.1 -u admin -p 123456 --detail
+jpy device status -s 192.168.1.1 -u admin -p admin --detail
 
 # JSON 输出
-jpy device status -s 192.168.1.1 -u admin -p 123456 -o json
+jpy device status -s 192.168.1.1 -u admin -p admin -o json
 ```
 
 ---
@@ -506,7 +506,7 @@ curl -X POST http://10.0.0.5:9090/exec \
 ### 签名
 
 ```
-jpy --remote <host:port> <任意命令及参数>
+jpy --remote <host:port> <任意命令及参数> [--async] [--async-timeout N]
 ```
 
 ### 说明
@@ -514,22 +514,57 @@ jpy --remote <host:port> <任意命令及参数>
 - 在 Cobra 解析之前拦截，位置无关（放在命令前后均可）
 - 自动补全 `http://` 前缀
 - 支持 `--remote host:port` 和 `--remote=host:port` 两种格式
-- 客户端超时 120 秒
+- 同步模式客户端超时 120 秒
+
+### 异步模式（--async）
+
+对于长时间运行的命令（如刷机、压力测试），使用 `--async` 参数可以立即返回任务 ID，后台执行。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--async` | bool | `false` | 启用异步模式 |
+| `--async-timeout` | int | `600` | 异步任务超时秒数（默认 10 分钟） |
+
+异步模式返回：
+```
+任务已提交
+Task ID: a1b2c3d4e5f6
+Status: running
+Timeout: 600 秒
+
+查看进度:
+  jpy shell --remote host:port --task a1b2c3d4e5f6
+
+终止任务:
+  jpy shell --remote host:port --kill a1b2c3d4e5f6
+```
 
 ### 示例
 
 ```bash
-# 远端列出设备
+# 远端列出设备（同步）
 jpy --remote 10.0.0.5:9090 device list -s 192.168.1.1 -u admin -p 123
 
-# 远端执行 shell
+# 远端执行 shell（同步）
 jpy --remote 10.0.0.5:9090 device shell "ls /sdcard" -s 192.168.1.1 -u admin -p 123 --seat 3
 
-# 远端重启 + JSON 输出
+# 远端重启 + JSON 输出（同步）
 jpy --remote 10.0.0.5:9090 device reboot -s 192.168.1.1 -u admin -p 123 --seat 3 -o json
 
 # --remote 放后面也行
 jpy device list -s 192.168.1.1 -u admin -p 123 --remote 10.0.0.5:9090
+
+# 异步执行刷机（立即返回 task_id）
+jpy --remote 10.0.0.5:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd -y --async --async-timeout 900
+
+# 异步执行压力测试（超时 24 小时）
+jpy --remote 10.0.0.5:9090 stress user -s wss://xxx/ws -k xxx -c /path/zh.json --loop 0 --async --async-timeout 86400
+
+# 查看任务进度
+jpy shell --remote 10.0.0.5:9090 --task a1b2c3d4e5f6
+
+# 终止任务
+jpy shell --remote 10.0.0.5:9090 --kill a1b2c3d4e5f6
 ```
 
 ---
@@ -931,8 +966,11 @@ jpy flash run --com COM3 --ch 1,3,5 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-
 # 模拟运行（查看 IP 映射，不实际执行）
 jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd --dry
 
-# 远程执行（COM口在远程机器上）
+# 远程执行（COM口在远程机器上，同步等待完成）
 jpy flash run --remote 192.168.1.100:9090 --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd
+
+# 远程异步执行（立即返回 task_id，适合长时间刷机）
+jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd -y --async --async-timeout 1800
 
 # JSON 输出
 jpy flash run --com COM3 --ch 1-3 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd -y -o json
