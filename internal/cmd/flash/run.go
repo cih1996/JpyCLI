@@ -421,10 +421,21 @@ func setMode(port string, channel int, mode string) error {
 	return nil
 }
 
+// getRomDir 从 flashScript 路径提取 ROM 目录，支持正斜杠和反斜杠
+func getRomDir() string {
+	// 统一转换为反斜杠（Windows 风格）
+	path := strings.ReplaceAll(flashScript, "/", "\\")
+	lastSlash := strings.LastIndex(path, "\\")
+	if lastSlash == -1 {
+		return "."
+	}
+	return path[:lastSlash]
+}
+
 // waitForFastboot 等待 fastboot 设备出现，返回设备序列号
 func waitForFastboot(maxWaitSec int) (string, error) {
 	// 获取 ROM 目录下的 fastboot 路径
-	romDir := flashScript[:strings.LastIndex(flashScript, "\\")]
+	romDir := getRomDir()
 	fastbootPath := romDir + "\\adb\\fastboot.exe"
 
 	for i := 0; i < maxWaitSec; i++ {
@@ -452,7 +463,7 @@ func runFlashCmd(serial string) error {
 	// ROM 目录结构固定：
 	// C:\ai-services\rom\xxx\adb\fastboot.exe
 	// C:\ai-services\rom\xxx\002.cmd
-	romDir := flashScript[:strings.LastIndex(flashScript, "\\")]
+	romDir := getRomDir()
 	flashCmd := romDir + "\\002.cmd"
 
 	// 同步执行 002.cmd <serial>
@@ -480,7 +491,7 @@ func printBanner() {
 	fmt.Fprintln(os.Stderr, "║           JPY 批量刷机工具 v1.0                ║")
 	fmt.Fprintln(os.Stderr, "╚════════════════════════════════════════════════╝")
 	fmt.Fprintf(os.Stderr, "中间件: %s (用户: %s)\n", middleware, user)
-	fmt.Fprintf(os.Stderr, "ROM目录: %s\n", flashScript[:strings.LastIndex(flashScript, "\\")])
+	fmt.Fprintf(os.Stderr, "ROM目录: %s\n", getRomDir())
 	fmt.Fprintf(os.Stderr, "COM口: %s | 通道: %s | IP起始: %s\n", comPort, channels, ipStart)
 	if remoteAddr != "" {
 		fmt.Fprintf(os.Stderr, "远程模式: %s\n", remoteAddr)
