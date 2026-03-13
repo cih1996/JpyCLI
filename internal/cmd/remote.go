@@ -45,11 +45,12 @@ func extractRemoteFlag(args []string) (string, []string) {
 	return "", nil
 }
 
-// extractAsyncFlag 从参数中提取 --async 和 --timeout 值
-// 返回: isAsync, timeout(秒), 剩余参数
-func extractAsyncFlag(args []string) (bool, int, []string) {
+// extractRemoteFlags 从参数中提取 --async、--async-timeout、--timeout 值
+// 返回: isAsync, asyncTimeout(秒), syncTimeout(秒), 剩余参数
+func extractRemoteFlags(args []string) (bool, int, int, []string) {
 	isAsync := false
-	timeout := 600 // 默认 10 分钟
+	asyncTimeout := 600 // 异步默认 10 分钟
+	syncTimeout := 120  // 同步默认 2 分钟
 	remaining := make([]string, 0, len(args))
 
 	for i := 0; i < len(args); i++ {
@@ -60,11 +61,11 @@ func extractAsyncFlag(args []string) (bool, int, []string) {
 			continue
 		}
 
-		// --async-timeout N
+		// --async-timeout N (异步任务超时)
 		if arg == "--async-timeout" {
 			if i+1 < len(args) {
 				if t, err := strconv.Atoi(args[i+1]); err == nil {
-					timeout = t
+					asyncTimeout = t
 				}
 				i++ // 跳过下一个参数
 			}
@@ -74,7 +75,26 @@ func extractAsyncFlag(args []string) (bool, int, []string) {
 		// --async-timeout=N
 		if strings.HasPrefix(arg, "--async-timeout=") {
 			if t, err := strconv.Atoi(strings.TrimPrefix(arg, "--async-timeout=")); err == nil {
-				timeout = t
+				asyncTimeout = t
+			}
+			continue
+		}
+
+		// --timeout N (同步 HTTP 超时)
+		if arg == "--timeout" {
+			if i+1 < len(args) {
+				if t, err := strconv.Atoi(args[i+1]); err == nil {
+					syncTimeout = t
+				}
+				i++ // 跳过下一个参数
+			}
+			continue
+		}
+
+		// --timeout=N
+		if strings.HasPrefix(arg, "--timeout=") {
+			if t, err := strconv.Atoi(strings.TrimPrefix(arg, "--timeout=")); err == nil {
+				syncTimeout = t
 			}
 			continue
 		}
@@ -82,7 +102,7 @@ func extractAsyncFlag(args []string) (bool, int, []string) {
 		remaining = append(remaining, arg)
 	}
 
-	return isAsync, timeout, remaining
+	return isAsync, asyncTimeout, syncTimeout, remaining
 }
 
 // asyncExecRequest 异步执行请求
@@ -103,11 +123,11 @@ func remoteExec(remoteAddr string, args []string) {
 		remoteAddr = "http://" + remoteAddr
 	}
 
-	// 检查是否异步模式
-	isAsync, timeout, cleanArgs := extractAsyncFlag(args)
+	// 提取所有远程执行相关参数
+	isAsync, asyncTimeout, syncTimeout, cleanArgs := extractRemoteFlags(args)
 
 	if isAsync {
-		remoteExecAsync(remoteAddr, cleanArgs, timeout)
+		remoteExecAsync(remoteAddr, cleanArgs, asyncTimeout)
 		return
 	}
 
@@ -120,7 +140,13 @@ func remoteExec(remoteAddr string, args []string) {
 		os.Exit(1)
 	}
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	// syncTimeout=0 表示无限等待
+	var client *http.Client
+	if syncTimeout == 0 {
+		client = &http.Client{} // 无超时
+	} else {
+		client = &http.Client{Timeout: time.Duration(syncTimeout) * time.Second}
+	}
 	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "连接远端失败: %v\n", err)
@@ -185,7 +211,11 @@ func remoteExecAsync(remoteAddr string, args []string, timeout int) {
 	fmt.Printf("任务已提交\n")
 	fmt.Printf("Task ID: %s\n", result.TaskID)
 	fmt.Printf("Status: %s\n", result.Status)
-	fmt.Printf("Timeout: %d 秒\n", timeout)
+	if timeout == 0 {
+		fmt.Printf("Timeout: 无限\n")
+	} else {
+		fmt.Printf("Timeout: %d 秒\n", timeout)
+	}
 	fmt.Printf("\n查看进度:\n")
 	fmt.Printf("  jpy shell --remote %s --task %s\n", strings.TrimPrefix(strings.TrimPrefix(remoteAddr, "http://"), "https://"), result.TaskID)
 	fmt.Printf("\n终止任务:\n")

@@ -35,6 +35,15 @@ func getFrpcPaths() (dir, binPath, configPath string) {
 	return
 }
 
+// 获取自身可执行文件路径
+func getSelfPath() string {
+	self, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return self
+}
+
 // 自检入口
 func runSelfCheck() {
 	fmt.Println("========================================")
@@ -46,7 +55,7 @@ func runSelfCheck() {
 	if runtime.GOOS == "windows" {
 		if !isWindowsAdmin() {
 			fmt.Println("[!] 警告: 未以管理员身份运行")
-			fmt.Println("    部分功能可能受限（如添加 Defender 白名单）")
+			fmt.Println("    部分功能可能受限（如添加 Defender 白名单、注册开机自启）")
 			fmt.Println("    建议: 右键点击程序 -> 以管理员身份运行")
 			fmt.Println()
 		} else {
@@ -85,19 +94,30 @@ func runSelfCheck() {
 		fmt.Println("未运行")
 	}
 
-	// 检测本地 9090 端口
-	fmt.Printf("[4] 本地 9090 端口: ")
-	if checkPort("127.0.0.1", 9090) {
-		fmt.Println("可用 (jpy server 运行中)")
+	// 检测 jpy server 运行状态
+	serverRunning := checkPort("127.0.0.1", 9090)
+	fmt.Printf("[4] JPY Server 状态: ")
+	if serverRunning {
+		fmt.Println("运行中 (端口 9090)")
 	} else {
-		fmt.Println("不可用 (jpy server 未运行)")
+		fmt.Println("未运行")
+	}
+
+	// 检测开机自启状态
+	autostartEnabled := isAutostartEnabled()
+	fmt.Printf("[5] 开机自启状态: ")
+	if autostartEnabled {
+		fmt.Println("已启用")
+	} else {
+		fmt.Println("未启用")
 	}
 
 	fmt.Println()
 	fmt.Println("========================================")
 
-	// 根据状态提供选项
+	// 根据状态自动处理
 	if !frpcExists || !configExists {
+		// FRPC 未配置，进入配置向导
 		fmt.Println()
 		fmt.Println("检测到 FRPC 未完全配置，是否进入配置向导？")
 		fmt.Print("输入 y 继续，其他键退出: ")
@@ -109,21 +129,267 @@ func runSelfCheck() {
 		if input == "y" || input == "yes" {
 			runFrpcSetup(frpcDir, frpcBin, frpcConfig, frpcExists)
 		}
-	} else if !frpcRunning {
+		return
+	}
+
+	// FRPC 已配置，自动启动服务
+	needAction := false
+
+	// 1. 自动启动 jpy server（如果未运行）
+	if !serverRunning {
 		fmt.Println()
-		fmt.Print("FRPC 未运行，是否启动？(y/n): ")
-
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(strings.ToLower(input))
-
-		if input == "y" || input == "yes" {
-			startFrpc(frpcBin, frpcConfig)
+		fmt.Println("[自动] 启动 JPY Server...")
+		if startJpyServerBackground() {
+			fmt.Println("       JPY Server 已在后台启动 (端口 9090)")
+			serverRunning = true
+			needAction = true
+		} else {
+			fmt.Println("       JPY Server 启动失败")
 		}
+	}
+
+	// 2. 自动启动 FRPC（如果未运行）
+	if !frpcRunning {
+		fmt.Println()
+		fmt.Println("[自动] 启动 FRPC...")
+		if startFrpcBackground(frpcBin, frpcConfig) {
+			fmt.Println("       FRPC 已在后台启动")
+			frpcRunning = true
+			needAction = true
+		} else {
+			fmt.Println("       FRPC 启动失败")
+		}
+	}
+
+	// 3. 注册开机自启（如果未启用）
+	if !autostartEnabled {
+		fmt.Println()
+		fmt.Println("[自动] 注册开机自启...")
+		if enableAutostart() {
+			fmt.Println("       开机自启已启用")
+			needAction = true
+		} else {
+			fmt.Println("       注册开机自启失败（可能需要管理员权限）")
+		}
+	}
+
+	if !needAction {
+		fmt.Println()
+		fmt.Println("一切正常！所有服务已在运行中。")
 	} else {
 		fmt.Println()
-		fmt.Println("一切正常！")
+		fmt.Println("========================================")
+		fmt.Println("服务状态:")
+		fmt.Printf("  - JPY Server: %s\n", boolToStatus(serverRunning))
+		fmt.Printf("  - FRPC: %s\n", boolToStatus(frpcRunning))
+		fmt.Printf("  - 开机自启: %s\n", boolToStatus(autostartEnabled || needAction))
+		fmt.Println("========================================")
 	}
+}
+
+func boolToStatus(b bool) string {
+	if b {
+		return "运行中"
+	}
+	return "未运行"
+}
+
+// 后台启动 jpy server
+func startJpyServerBackground() bool {
+	self := getSelfPath()
+	if self == "" {
+		return false
+	}
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		// Windows: 使用 start /B 后台运行
+		cmd = exec.Command("cmd", "/C", "start", "/B", self, "server", "--port", "9090")
+	} else {
+		// Unix: 使用 nohup 后台运行
+		cmd = exec.Command("nohup", self, "server", "--port", "9090")
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+	}
+
+	if err := cmd.Start(); err != nil {
+		return false
+	}
+
+	// 等待一下确认启动成功
+	time.Sleep(500 * time.Millisecond)
+	return checkPort("127.0.0.1", 9090)
+}
+
+// 后台启动 FRPC
+func startFrpcBackground(frpcBin, frpcConfig string) bool {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		// Windows: 使用 start /B 后台运行
+		cmd = exec.Command("cmd", "/C", "start", "/B", frpcBin, "-c", frpcConfig)
+	} else {
+		// Unix: 使用 nohup 后台运行
+		cmd = exec.Command("nohup", frpcBin, "-c", frpcConfig)
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+	}
+
+	if err := cmd.Start(); err != nil {
+		return false
+	}
+
+	// 等待一下确认启动成功
+	time.Sleep(500 * time.Millisecond)
+	return isFrpcRunning()
+}
+
+// 检测开机自启是否已启用
+func isAutostartEnabled() bool {
+	if runtime.GOOS == "windows" {
+		return isWindowsAutostartEnabled()
+	}
+	// macOS/Linux: 检查 launchd/systemd
+	return isUnixAutostartEnabled()
+}
+
+// Windows: 检测开机自启
+func isWindowsAutostartEnabled() bool {
+	// 检查计划任务是否存在
+	cmd := exec.Command("schtasks", "/Query", "/TN", "JPY-CLI-Autostart")
+	err := cmd.Run()
+	return err == nil
+}
+
+// Unix: 检测开机自启
+func isUnixAutostartEnabled() bool {
+	home, _ := os.UserHomeDir()
+	if runtime.GOOS == "darwin" {
+		// macOS: 检查 LaunchAgent
+		plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.jpy.cli.plist")
+		return fileExists(plistPath)
+	}
+	// Linux: 检查 systemd user service
+	servicePath := filepath.Join(home, ".config", "systemd", "user", "jpy-cli.service")
+	return fileExists(servicePath)
+}
+
+// 启用开机自启
+func enableAutostart() bool {
+	if runtime.GOOS == "windows" {
+		return enableWindowsAutostart()
+	}
+	return enableUnixAutostart()
+}
+
+// Windows: 使用计划任务实现开机自启
+func enableWindowsAutostart() bool {
+	self := getSelfPath()
+	if self == "" {
+		return false
+	}
+
+	// 创建计划任务：用户登录时运行
+	cmd := exec.Command("schtasks", "/Create",
+		"/TN", "JPY-CLI-Autostart",
+		"/TR", fmt.Sprintf("\"%s\"", self),
+		"/SC", "ONLOGON",
+		"/RL", "HIGHEST",
+		"/F", // 强制覆盖已存在的任务
+	)
+
+	return cmd.Run() == nil
+}
+
+// Unix: 使用 launchd/systemd 实现开机自启
+func enableUnixAutostart() bool {
+	self := getSelfPath()
+	if self == "" {
+		return false
+	}
+
+	home, _ := os.UserHomeDir()
+
+	if runtime.GOOS == "darwin" {
+		// macOS: 创建 LaunchAgent
+		return enableMacOSAutostart(self, home)
+	}
+
+	// Linux: 创建 systemd user service
+	return enableLinuxAutostart(self, home)
+}
+
+// macOS: 创建 LaunchAgent
+func enableMacOSAutostart(self, home string) bool {
+	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
+	if err := os.MkdirAll(launchAgentsDir, 0755); err != nil {
+		return false
+	}
+
+	plistPath := filepath.Join(launchAgentsDir, "com.jpy.cli.plist")
+	plistContent := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jpy.cli</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>%s</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>%s/.jpy/logs/jpy-cli.log</string>
+    <key>StandardErrorPath</key>
+    <string>%s/.jpy/logs/jpy-cli.err</string>
+</dict>
+</plist>
+`, self, home, home)
+
+	// 确保日志目录存在
+	os.MkdirAll(filepath.Join(home, ".jpy", "logs"), 0755)
+
+	if err := os.WriteFile(plistPath, []byte(plistContent), 0644); err != nil {
+		return false
+	}
+
+	// 加载 LaunchAgent
+	exec.Command("launchctl", "unload", plistPath).Run() // 先卸载（忽略错误）
+	return exec.Command("launchctl", "load", plistPath).Run() == nil
+}
+
+// Linux: 创建 systemd user service
+func enableLinuxAutostart(self, home string) bool {
+	serviceDir := filepath.Join(home, ".config", "systemd", "user")
+	if err := os.MkdirAll(serviceDir, 0755); err != nil {
+		return false
+	}
+
+	servicePath := filepath.Join(serviceDir, "jpy-cli.service")
+	serviceContent := fmt.Sprintf(`[Unit]
+Description=JPY CLI Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%s
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`, self)
+
+	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
+		return false
+	}
+
+	// 重载并启用服务
+	exec.Command("systemctl", "--user", "daemon-reload").Run()
+	exec.Command("systemctl", "--user", "enable", "jpy-cli.service").Run()
+	return exec.Command("systemctl", "--user", "start", "jpy-cli.service").Run() == nil
 }
 
 // FRPC 配置向导
@@ -248,36 +514,38 @@ remote_port = %s
 	fmt.Println(config)
 	fmt.Println("---")
 
-	// 询问是否启动
-	fmt.Print("是否立即启动 FRPC？(y/n): ")
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(strings.ToLower(input))
-
-	if input == "y" || input == "yes" {
-		startFrpc(frpcBin, frpcConfig)
-	}
-}
-
-// 启动 FRPC
-func startFrpc(frpcBin, frpcConfig string) {
+	// 自动启动所有服务
 	fmt.Println()
-	fmt.Println("正在启动 FRPC...")
+	fmt.Println("正在启动服务...")
 
-	cmd := exec.Command(frpcBin, "-c", frpcConfig)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Start(); err != nil {
-		fmt.Printf("启动失败: %v\n", err)
-		return
+	// 1. 启动 jpy server
+	fmt.Print("  [1/3] 启动 JPY Server... ")
+	if startJpyServerBackground() {
+		fmt.Println("成功")
+	} else {
+		fmt.Println("失败")
 	}
 
-	fmt.Printf("FRPC 已启动 (PID: %d)\n", cmd.Process.Pid)
-	fmt.Println("提示: FRPC 正在前台运行，按 Ctrl+C 停止")
-	fmt.Println()
+	// 2. 启动 FRPC
+	fmt.Print("  [2/3] 启动 FRPC... ")
+	if startFrpcBackground(frpcBin, frpcConfig) {
+		fmt.Println("成功")
+	} else {
+		fmt.Println("失败")
+	}
 
-	// 等待进程结束
-	cmd.Wait()
+	// 3. 注册开机自启
+	fmt.Print("  [3/3] 注册开机自启... ")
+	if enableAutostart() {
+		fmt.Println("成功")
+	} else {
+		fmt.Println("失败（可能需要管理员权限）")
+	}
+
+	fmt.Println()
+	fmt.Println("========================================")
+	fmt.Println("所有服务已启动！")
+	fmt.Println("========================================")
 }
 
 // 显示配置摘要

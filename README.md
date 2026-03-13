@@ -90,17 +90,19 @@ jpy shell --remote 192.168.1.100:9090 --kill <task_id>
 
 ```bash
 # 刷 COM3 通道1（IP: 172.25.0.11）
-jpy flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd -y
+jpy flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script "C:/ai-services/rom/8se-20260309/002.cmd" -y
 
 # 刷 COM3 的 1-10 通道（IP: 172.25.0.11-20）
-jpy flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd
+jpy flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-start 172.25.0.11 --script "C:/ai-services/rom/8se-20260309/002.cmd"
 
 # 远程刷机（COM口在远程机器上）
-jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd
+jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script "C:/ai-services/rom/8se-20260309/002.cmd" -y
 
 # 模拟运行（查看 IP 映射）
-jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd --dry
+jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-start 172.25.0.11 --script "C:/ai-services/rom/8se-20260309/002.cmd" --dry
 ```
+
+**路径格式：** `--script` 支持 Unix 风格路径（`C:/path/to/002.cmd`），推荐使用以避免转义问题
 
 **IP 计算规则：** `--ip-start` 指定通道1的起始IP，后续通道自动递增
 
@@ -109,7 +111,7 @@ jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-start 172.25.0.11 --scr
 2. 发送 reboot bootloader
 3. 切换 COM 通道为 HUB 模式
 4. 等待 fastboot 设备出现
-5. 执行 002.cmd 刷机脚本
+5. 执行刷机脚本（传入设备序列号）
 6. 切换回 OTG 模式
 
 ### 5. File - 远程文件传输
@@ -141,6 +143,9 @@ jpy stress user -k YOUR_SECRET_KEY -c config.json --device 123,456,789 --loop 3 
 # 无限循环测试
 jpy stress user -k YOUR_SECRET_KEY -c config.json --loop 0 --interval 3m
 
+# 调试模式：遇到失败立即停止（配合 --loop 0 保留现场）
+jpy stress user -k YOUR_SECRET_KEY -c config.json --loop 0 --debug
+
 # 自定义超时和日志目录
 jpy stress user -k YOUR_SECRET_KEY -c config.json --timeout 15m --log-dir /var/log/stress
 ```
@@ -154,6 +159,7 @@ jpy stress user -k YOUR_SECRET_KEY -c config.json --timeout 15m --log-dir /var/l
 - `--interval`: 循环间隔时间（默认 3m）
 - `--timeout`: 单轮超时时间（默认 10m）
 - `--log-dir`: 日志目录（默认 ~/.jpy/logs/stress）
+- `--debug`: 调试模式，遇到失败立即停止（配合 --loop 0 保留现场）
 
 **日志文件：** 独立记录到 `~/.jpy/logs/stress/stress_user_YYYYMMDD_HHMMSS.log`，不受 SDK 内部日志干扰。
 
@@ -165,14 +171,24 @@ jpy stress user -k YOUR_SECRET_KEY -c config.json --timeout 15m --log-dir /var/l
 # 启动 server（在远程机器上）
 jpy server --port 9090
 
-# 远程调用（在本地）
+# 远程调用（在本地，默认 120 秒超时）
 jpy --remote 192.168.1.100:9090 device list -s 192.168.1.1 -u admin -p 123456
 jpy --remote 192.168.1.100:9090 com list
+
+# 同步执行刷机（无限等待，适合批量刷机）
+jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1-20 ... -y --timeout 0
+
+# 异步执行（立即返回 task_id）
+jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1-20 ... -y --async --async-timeout 0
 ```
 
-## 自检模式
+**超时参数：**
+- `--timeout N`：同步模式 HTTP 等待超时（秒），0=无限等待，默认 120
+- `--async-timeout N`：异步模式任务超时（秒），0=无限，默认 600
 
-无参数运行 `jpy` 进入自检模式，检测并配置 FRPC 内网穿透：
+## 自检模式（双击运行）
+
+无参数运行 `jpy` 进入自检模式，自动完成以下操作：
 
 ```bash
 jpy
@@ -185,10 +201,21 @@ jpy
 # [2] FRPC 配置文件: ~/.jpy/frpc/frpc.ini
 #     状态: 已配置
 # [3] FRPC 运行状态: 运行中
-# [4] 本地 9090 端口: 可用
+# [4] JPY Server 状态: 运行中 (端口 9090)
+# [5] 开机自启状态: 已启用
 ```
 
-首次运行会引导配置 FRPC（服务器地址、端口、密钥、远程映射端口）。
+**自动行为：**
+1. 检测 JPY Server 是否运行，未运行则自动后台启动
+2. 检测 FRPC 是否运行，未运行则自动后台启动
+3. 检测开机自启是否启用，未启用则自动注册
+
+**开机自启实现：**
+- Windows: 计划任务 (schtasks)，用户登录时自动运行
+- macOS: LaunchAgent，开机自动运行
+- Linux: systemd user service，开机自动运行
+
+首次运行会引导配置 FRPC（服务器地址、端口、密钥、远程映射端口），配置完成后自动启动所有服务。
 
 ## HTTP 接口
 
@@ -219,17 +246,25 @@ curl -X POST http://192.168.1.100:9090/exec \
   -H "Content-Type: application/json" \
   -d '{"args": ["device", "list", "-s", "xxx", "-u", "xxx", "-p", "xxx"]}'
 
-# 执行 CLI 命令（异步，适合长时间任务）
+# 执行 CLI 命令（异步，无限超时）
 curl -X POST http://192.168.1.100:9090/exec/async \
   -H "Content-Type: application/json" \
-  -d '{"args": ["stress", "user", "-k", "xxx", "-c", "/path/config.json", "--loop", "0"], "timeout": 86400}'
+  -d '{"args": ["flash", "run", "--com", "COM3", "--ch", "1-20", "--mw", "172.25.0.251", "--ip-start", "172.25.0.11", "--script", "C:/ai-services/rom/8se-20260309/002.cmd", "-y"], "timeout": 0}'
 
-# 查询任务状态
+# 查询任务状态（status: running/done/failed）
 curl http://192.168.1.100:9090/shell/task?id=abc123
 
 # 终止任务
 curl http://192.168.1.100:9090/shell/kill?id=abc123
 ```
+
+**异步任务状态判断：**
+- `status: "running"` → 进行中
+- `status: "done"` + `exit_code: 0` → 成功
+- `status: "done"` + `exit_code: 非0` → 失败
+- `status: "failed"` + `exit_code: 124` → 超时
+
+**timeout 参数：** `0`=无限，不传=默认600秒
 
 ## 输出格式
 

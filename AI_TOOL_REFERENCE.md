@@ -506,7 +506,7 @@ curl -X POST http://10.0.0.5:9090/exec \
 ### 签名
 
 ```
-jpy --remote <host:port> <任意命令及参数> [--async] [--async-timeout N]
+jpy --remote <host:port> <任意命令及参数> [--timeout N] [--async] [--async-timeout N]
 ```
 
 ### 说明
@@ -514,7 +514,26 @@ jpy --remote <host:port> <任意命令及参数> [--async] [--async-timeout N]
 - 在 Cobra 解析之前拦截，位置无关（放在命令前后均可）
 - 自动补全 `http://` 前缀
 - 支持 `--remote host:port` 和 `--remote=host:port` 两种格式
-- 同步模式客户端超时 120 秒
+
+### 同步模式（默认）
+
+同步模式会等待命令执行完成后返回结果。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--timeout` | int | `120` | HTTP 等待超时秒数（0=无限等待） |
+
+示例：
+```bash
+# 默认超时 120 秒
+jpy --remote 10.0.0.5:9090 device list -s 192.168.1.1 -u admin -p 123
+
+# 设置 30 分钟超时（适合刷机）
+jpy --remote 10.0.0.5:9090 flash run ... -y --timeout 1800
+
+# 无限等待（适合批量刷机 20 台设备）
+jpy --remote 10.0.0.5:9090 flash run ... -y --timeout 0
+```
 
 ### 异步模式（--async）
 
@@ -523,7 +542,7 @@ jpy --remote <host:port> <任意命令及参数> [--async] [--async-timeout N]
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `--async` | bool | `false` | 启用异步模式 |
-| `--async-timeout` | int | `600` | 异步任务超时秒数（默认 10 分钟） |
+| `--async-timeout` | int | `600` | 异步任务超时秒数（0=无限，默认 10 分钟） |
 
 异步模式返回：
 ```
@@ -539,10 +558,111 @@ Timeout: 600 秒
   jpy shell --remote host:port --kill a1b2c3d4e5f6
 ```
 
+### 异步任务状态判断
+
+查询任务状态：
+```bash
+jpy shell --remote host:port --task <task_id> -o json
+```
+
+返回 JSON schema：
+```json
+{
+  "task_id": "a1b2c3d4e5f6",
+  "status": "running",
+  "exit_code": 0,
+  "stdout": "任务输出...",
+  "stderr": "",
+  "elapsed": "120.5s",
+  "command": "jpy flash run ..."
+}
+```
+
+状态判断逻辑：
+
+| status | exit_code | 含义 |
+|--------|-----------|------|
+| `running` | — | 任务进行中 |
+| `done` | `0` | 成功完成 |
+| `done` | `非0` | 执行失败（查看 stderr） |
+| `failed` | `124` | 超时 |
+| `failed` | `137` | 被终止（kill） |
+
+AI 调用示例：
+```bash
+# 判断任务是否完成
+status=$(jpy shell --remote host:port --task abc123 -o json | jq -r '.status')
+if [ "$status" = "done" ]; then
+  echo "任务完成"
+fi
+
+# 判断是否成功
+exit_code=$(jpy shell --remote host:port --task abc123 -o json | jq -r '.exit_code')
+if [ "$exit_code" = "0" ]; then
+  echo "执行成功"
+fi
+```
+
+### HTTP API 调用
+
+#### POST /exec/async（异步执行）
+
+请求：
+```json
+{
+  "args": ["flash", "run", "--com", "COM3", "--ch", "1-10", "--mw", "172.25.0.251", "--ip-start", "172.25.0.11", "--script", "C:/ai-services/rom/8se-20260309/002.cmd", "-y"],
+  "timeout": 0
+}
+```
+
+> timeout: 0=无限，不传或-1=默认600秒
+
+响应：
+```json
+{
+  "task_id": "a1b2c3d4e5f6",
+  "status": "running"
+}
+```
+
+#### GET /shell/task?id=xxx（查询任务）
+
+响应：
+```json
+{
+  "task_id": "a1b2c3d4e5f6",
+  "status": "done",
+  "exit_code": 0,
+  "stdout": "刷机日志...",
+  "stderr": "",
+  "elapsed": "8m30s",
+  "command": "jpy flash run ..."
+}
+```
+
+#### GET /shell/tasks（列出所有任务）
+
+响应：
+```json
+{
+  "tasks": [
+    {"task_id": "abc123", "status": "running", "command": "...", "elapsed": "2m30s"},
+    {"task_id": "def456", "status": "done", "command": "...", "elapsed": "5m10s"}
+  ]
+}
+```
+
+#### GET /shell/kill?id=xxx（终止任务）
+
+响应：
+```json
+{"success": true, "message": "任务已终止"}
+```
+
 ### 示例
 
 ```bash
-# 远端列出设备（同步）
+# 远端列出设备（同步，默认 120 秒超时）
 jpy --remote 10.0.0.5:9090 device list -s 192.168.1.1 -u admin -p 123
 
 # 远端执行 shell（同步）
@@ -554,11 +674,20 @@ jpy --remote 10.0.0.5:9090 device reboot -s 192.168.1.1 -u admin -p 123 --seat 3
 # --remote 放后面也行
 jpy device list -s 192.168.1.1 -u admin -p 123 --remote 10.0.0.5:9090
 
-# 异步执行刷机（立即返回 task_id）
-jpy --remote 10.0.0.5:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd -y --async --async-timeout 900
+# 同步执行刷机（30 分钟超时）
+jpy --remote 10.0.0.5:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script "C:/ai-services/rom/8se-20260309/002.cmd" -y --timeout 1800
 
-# 异步执行压力测试（超时 24 小时）
-jpy --remote 10.0.0.5:9090 stress user -s wss://xxx/ws -k xxx -c /path/zh.json --loop 0 --async --async-timeout 86400
+# 同步执行批量刷机（无限等待，适合刷 20 台设备）
+jpy --remote 10.0.0.5:9090 flash run --com COM3 --ch 1-20 --mw 172.25.0.251 --ip-start 172.25.0.11 --script "C:/ai-services/rom/8se-20260309/002.cmd" -y --timeout 0
+
+# 异步执行刷机（立即返回 task_id，超时 15 分钟）
+jpy --remote 10.0.0.5:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script "C:/ai-services/rom/8se-20260309/002.cmd" -y --async --async-timeout 900
+
+# 异步执行批量刷机（无限超时，适合刷 20 台设备）
+jpy --remote 10.0.0.5:9090 flash run --com COM3 --ch 1-20 --mw 172.25.0.251 --ip-start 172.25.0.11 --script "C:/ai-services/rom/8se-20260309/002.cmd" -y --async --async-timeout 0
+
+# 异步执行压力测试（无限超时）
+jpy --remote 10.0.0.5:9090 stress user -s wss://xxx/ws -k xxx -c /path/zh.json --loop 0 --async --async-timeout 0
 
 # 查看任务进度
 jpy shell --remote 10.0.0.5:9090 --task a1b2c3d4e5f6
@@ -927,9 +1056,14 @@ D:\rom\xxx\
 │   └── fastboot.exe
 ├── img\
 │   └── (镜像文件)
-├── 002.cmd          # 实际刷机脚本
-└── flash_script.cmd # 扫描脚本（不再使用）
+└── 002.cmd          # 刷机脚本（接收设备序列号作为参数）
 ```
+
+### 路径格式注意
+
+`--script` 参数支持多种路径格式，会自动转换为 Windows 格式：
+- Windows 风格：`D:\rom\002.cmd`
+- Unix 风格：`D:/rom/002.cmd`（推荐，避免转义问题）
 
 ### 日志格式
 
@@ -978,10 +1112,10 @@ jpy flash run --com COM3 --ch 1,3,5 --mw 172.25.0.251 --ip-start 172.25.0.11 --s
 jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd --dry
 
 # 远程执行（COM口在远程机器上，同步等待完成）
-jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd
+jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script "C:/ai-services/rom/8se-20260309/002.cmd" -y
 
 # 远程异步执行（立即返回 task_id，适合长时间刷机）
-jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd -y --async --async-timeout 1800
+jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-start 172.25.0.11 --script "C:/ai-services/rom/8se-20260309/002.cmd" -y --async --async-timeout 1800
 
 # JSON 输出
 jpy flash run --com COM3 --ch 1-3 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd -y -o json
