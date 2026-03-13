@@ -568,14 +568,8 @@ func handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 禁用读取超时（大文件上传需要更长时间）
-	if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
-		// 无法 hijack，使用原始连接
-		conn.Close()
-	}
-	// 通过设置更长的 deadline 来处理大文件
-	if ctrl := http.NewResponseController(w); ctrl != nil {
-		ctrl.SetReadDeadline(time.Now().Add(30 * time.Minute))
-	}
+	// 注意：http.NewResponseController 需要 Go 1.20+，为兼容 Win7 版本（Go 1.19）移除
+	// 分片上传已解决大文件超时问题
 
 	// 限制上传大小 5GB
 	r.Body = http.MaxBytesReader(w, r.Body, 5<<30)
