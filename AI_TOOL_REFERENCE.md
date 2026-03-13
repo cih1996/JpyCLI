@@ -555,7 +555,7 @@ jpy --remote 10.0.0.5:9090 device reboot -s 192.168.1.1 -u admin -p 123 --seat 3
 jpy device list -s 192.168.1.1 -u admin -p 123 --remote 10.0.0.5:9090
 
 # 异步执行刷机（立即返回 task_id）
-jpy --remote 10.0.0.5:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd -y --async --async-timeout 900
+jpy --remote 10.0.0.5:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd -y --async --async-timeout 900
 
 # 异步执行压力测试（超时 24 小时）
 jpy --remote 10.0.0.5:9090 stress user -s wss://xxx/ws -k xxx -c /path/zh.json --loop 0 --async --async-timeout 86400
@@ -879,7 +879,7 @@ jpy shell --remote 10.0.0.5:9090 --task a1b2c3d4e5f6
 ### 签名
 
 ```
-jpy flash run --com <COM口> --mw <中间件> --ip-prefix <IP前缀> --ip-offset <IP偏移> --script <脚本路径> [--ch <通道>] [--dry] [-y] [-o plain|json]
+jpy flash run --com <COM口> --mw <中间件> --ip-start <起始IP> --script <ROM目录下脚本> [--ch <通道>] [--dry] [-y] [-o plain|json]
 ```
 
 ### 参数
@@ -888,9 +888,8 @@ jpy flash run --com <COM口> --mw <中间件> --ip-prefix <IP前缀> --ip-offset
 |------|------|------|--------|------|------|
 | `--com` | — | string | — | 是 | COM口: COM3, COM4, COM6 或 all |
 | `--mw` | — | string | — | 是 | 中间件地址 |
-| `--ip-prefix` | — | string | — | 是 | IP 前缀（如 172.25.0 或 192.168.11） |
-| `--ip-offset` | — | int | — | 是 | IP 偏移量（设备IP = ip-prefix.(ip-offset + 通道号 - 1)，即 ip-offset 是通道1的起始IP） |
-| `--script` | — | string | — | 是 | 刷机脚本路径 |
+| `--ip-start` | — | string | — | 是 | 通道1的起始IP（如 172.25.0.11） |
+| `--script` | — | string | — | 是 | ROM目录下的脚本路径（如 D:\rom\002.cmd） |
 | `--ch` | — | string | `all` | 否 | 通道: 1,2,3 或 1-20 或 all |
 | `--user` | `-u` | string | `admin` | 否 | 中间件用户名 |
 | `--pass` | `-p` | string | `admin` | 否 | 中间件密码 |
@@ -904,21 +903,33 @@ jpy flash run --com <COM口> --mw <中间件> --ip-prefix <IP前缀> --ip-offset
 
 ### IP 计算规则
 
-设备 IP = `{ip-prefix}.{ip-offset + 通道号 - 1}`
-
-即 `ip-offset` 是通道1的起始IP。
+设备 IP = `{ip-start前三段}.{ip-start最后一段 + 通道号 - 1}`
 
 示例：
-- `--ip-prefix 172.25.0 --ip-offset 11 --ch 1` => IP: 172.25.0.11
-- `--ip-prefix 172.25.0 --ip-offset 11 --ch 3` => IP: 172.25.0.13
+- `--ip-start 172.25.0.11 --ch 1` => IP: 172.25.0.11
+- `--ip-start 172.25.0.11 --ch 3` => IP: 172.25.0.13
+- `--ip-start 172.25.0.11 --ch 5` => IP: 172.25.0.15
 
 ### 工作流程
 
 1. 检查设备状态（通过 `jpy device list`）
 2. 发送 `reboot bootloader`（通过 `jpy device shell`）
 3. 切换 COM 通道为 HUB 模式（通过 `jpy com set-mode`）
-4. 执行刷机脚本
-5. 刷机成功后切换回 OTG 模式
+4. 等待 fastboot 设备出现（使用 ROM 目录下的 `adb\fastboot.exe`）
+5. 执行刷机脚本 `002.cmd <设备序列号>`（同步等待完成）
+6. 刷机成功后切换回 OTG 模式
+
+### ROM 目录结构
+
+```
+D:\rom\xxx\
+├── adb\
+│   └── fastboot.exe
+├── img\
+│   └── (镜像文件)
+├── 002.cmd          # 实际刷机脚本
+└── flash_script.cmd # 扫描脚本（不再使用）
+```
 
 ### 日志格式
 
@@ -955,25 +966,25 @@ jpy flash run --com <COM口> --mw <中间件> --ip-prefix <IP前缀> --ip-offset
 
 ```bash
 # 刷 COM3 通道1（IP: 172.25.0.11）
-jpy flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd
+jpy flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd
 
 # 刷 COM3 的 1-10 通道（IP: 172.25.0.11-20）
-jpy flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd
+jpy flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd
 
 # 刷指定通道 1,3,5（IP: 172.25.0.11, 13, 15）
-jpy flash run --com COM3 --ch 1,3,5 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd
+jpy flash run --com COM3 --ch 1,3,5 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd
 
 # 模拟运行（查看 IP 映射，不实际执行）
-jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd --dry
+jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd --dry
 
 # 远程执行（COM口在远程机器上，同步等待完成）
-jpy flash run --remote 192.168.1.100:9090 --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd
+jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd
 
 # 远程异步执行（立即返回 task_id，适合长时间刷机）
-jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd -y --async --async-timeout 1800
+jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd -y --async --async-timeout 1800
 
 # JSON 输出
-jpy flash run --com COM3 --ch 1-3 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd -y -o json
+jpy flash run --com COM3 --ch 1-3 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd -y -o json
 ```
 
 ---

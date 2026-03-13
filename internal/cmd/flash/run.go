@@ -52,8 +52,7 @@ var (
 	flashScript string
 	comPort     string
 	channels    string
-	ipPrefix    string // IP 前缀，如 172.25.0 或 192.168.11
-	ipOffset    int    // IP 偏移量，设备IP = ip-prefix.(ip-offset + 通道号)
+	ipStart     string // 通道1的起始IP，如 172.25.0.11
 	dryRun      bool
 	timeout     int
 	jpyPath     string
@@ -71,37 +70,36 @@ func newRunCmd() *cobra.Command {
 		Long: `执行批量刷机任务。
 
 IP 计算规则:
-  设备IP = {ip-prefix}.{ip-offset + 通道号 - 1}
-  即 ip-offset 是通道1的起始IP
-  例: --ip-prefix 172.25.0 --ip-offset 11 --ch 1 => 172.25.0.11
-      --ip-prefix 172.25.0 --ip-offset 11 --ch 3 => 172.25.0.13
+  --ip-start 指定通道1的起始IP，后续通道IP自动递增
+  例: --ip-start 172.25.0.11 --ch 1 => 172.25.0.11
+      --ip-start 172.25.0.11 --ch 3 => 172.25.0.13
+      --ip-start 172.25.0.11 --ch 5 => 172.25.0.15
 
 示例:
   # 刷 COM3 通道1（IP: 172.25.0.11）
-  jpy flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd
+  jpy flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd
 
   # 刷 COM3 的 1-10 通道（IP: 172.25.0.11-20）
-  jpy flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd
+  jpy flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd
 
   # 刷指定通道 1,3,5（IP: 172.25.0.11, 13, 15）
-  jpy flash run --com COM3 --ch 1,3,5 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd
+  jpy flash run --com COM3 --ch 1,3,5 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd
 
   # 模拟运行（查看 IP 映射）
-  jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd --dry
+  jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd --dry
 
   # 远程执行（COM口在远程机器上）
-  jpy flash run --remote 192.168.1.100:9090 --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 11 --script D:\flash\flash.cmd`,
+  jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd`,
 		RunE: runFlash,
 	}
 
 	cmd.Flags().StringVar(&middleware, "mw", "", "中间件地址（必填）")
 	cmd.Flags().StringVarP(&user, "user", "u", "admin", "中间件用户名")
 	cmd.Flags().StringVarP(&pass, "pass", "p", "admin", "中间件密码")
-	cmd.Flags().StringVar(&flashScript, "script", "", "刷机脚本路径（必填）")
+	cmd.Flags().StringVar(&flashScript, "script", "", "ROM目录下的脚本路径（必填，如 D:\\rom\\002.cmd）")
 	cmd.Flags().StringVar(&comPort, "com", "", "COM口: COM3, COM4, COM6 或 all（必填）")
 	cmd.Flags().StringVar(&channels, "ch", "all", "通道: 1,2,3 或 1-20 或 all")
-	cmd.Flags().StringVar(&ipPrefix, "ip-prefix", "", "IP 前缀（必填，如 172.25.0 或 192.168.11）")
-	cmd.Flags().IntVar(&ipOffset, "ip-offset", -1, "通道1的起始IP（必填，通道N的IP = ip-offset + N - 1）")
+	cmd.Flags().StringVar(&ipStart, "ip-start", "", "通道1的起始IP（必填，如 172.25.0.11）")
 	cmd.Flags().BoolVar(&dryRun, "dry", false, "模拟运行")
 	cmd.Flags().IntVar(&timeout, "timeout", 600, "单台刷机超时(秒)")
 	cmd.Flags().StringVar(&jpyPath, "jpy", "jpy", "jpy工具路径")
@@ -114,8 +112,7 @@ IP 计算规则:
 	cmd.MarkFlagRequired("mw")
 	cmd.MarkFlagRequired("script")
 	cmd.MarkFlagRequired("com")
-	cmd.MarkFlagRequired("ip-prefix")
-	cmd.MarkFlagRequired("ip-offset")
+	cmd.MarkFlagRequired("ip-start")
 
 	return cmd
 }
@@ -185,6 +182,17 @@ func runFlash(cmd *cobra.Command, args []string) error {
 func parseTasks() []FlashTask {
 	tasks := make([]FlashTask, 0)
 
+	// 解析 --ip-start，如 172.25.0.11 => prefix=172.25.0, offset=11
+	lastDot := strings.LastIndex(ipStart, ".")
+	if lastDot == -1 {
+		return tasks
+	}
+	ipPrefix := ipStart[:lastDot]
+	ipOffset, err := strconv.Atoi(ipStart[lastDot+1:])
+	if err != nil {
+		return tasks
+	}
+
 	// 解析 COM 口
 	coms := []string{}
 	if strings.ToLower(comPort) == "all" {
@@ -203,9 +211,9 @@ func parseTasks() []FlashTask {
 			if ch < 1 || ch > 20 {
 				continue
 			}
-			// IP = ip-prefix.(ip-offset + 通道号 - 1)
-			// 即 ip-offset 是通道1的起始IP
-			// 例: --ip-offset 11 --ch 1 => 11, --ch 3 => 13
+			// IP = ipPrefix.(ipOffset + 通道号 - 1)
+			// 例: --ip-start 172.25.0.11 --ch 1 => 172.25.0.11
+			//     --ip-start 172.25.0.11 --ch 3 => 172.25.0.13
 			tasks = append(tasks, FlashTask{
 				COM:     c,
 				Channel: ch,
@@ -274,7 +282,8 @@ func flashDevice(task FlashTask) FlashResult {
 		logInfo(task.COM, task.Channel, "[模拟] 检查设备状态")
 		logInfo(task.COM, task.Channel, "[模拟] reboot bootloader")
 		logInfo(task.COM, task.Channel, "[模拟] 切换 HUB 模式")
-		logInfo(task.COM, task.Channel, "[模拟] 执行刷机脚本")
+		logInfo(task.COM, task.Channel, "[模拟] 等待 fastboot 设备")
+		logInfo(task.COM, task.Channel, "[模拟] 执行 002.cmd")
 		logInfo(task.COM, task.Channel, "[模拟] 切换 OTG 模式")
 		time.Sleep(2 * time.Second)
 		result.Success = true
@@ -315,9 +324,20 @@ func flashDevice(task FlashTask) FlashResult {
 	}
 	time.Sleep(10 * time.Second)
 
-	// Step 4: 执行刷机脚本
-	logInfo(task.COM, task.Channel, "[4/5] 执行刷机脚本 (超时%d秒)...", timeout)
-	if err := runFlashScript(); err != nil {
+	// Step 4: 等待 fastboot 设备出现
+	logInfo(task.COM, task.Channel, "[4/6] 等待 fastboot 设备...")
+	serial, err := waitForFastboot(30) // 最多等30秒
+	if err != nil {
+		setMode(task.COM, task.Channel, "otg")
+		result.Error = fmt.Sprintf("等待 fastboot 失败: %v", err)
+		result.Duration = time.Since(startTime)
+		return result
+	}
+	logInfo(task.COM, task.Channel, "检测到 fastboot 设备: %s", serial)
+
+	// Step 5: 执行刷机脚本 002.cmd
+	logInfo(task.COM, task.Channel, "[5/6] 执行刷机 (超时%d秒)...", timeout)
+	if err := runFlashCmd(serial); err != nil {
 		// 失败也要切回 OTG
 		setMode(task.COM, task.Channel, "otg")
 		result.Error = fmt.Sprintf("刷机失败: %v", err)
@@ -325,8 +345,8 @@ func flashDevice(task FlashTask) FlashResult {
 		return result
 	}
 
-	// Step 5: 切换 OTG 模式
-	logInfo(task.COM, task.Channel, "[5/5] 切换为 OTG 模式...")
+	// Step 6: 切换 OTG 模式
+	logInfo(task.COM, task.Channel, "[6/6] 切换为 OTG 模式...")
 	if err := setMode(task.COM, task.Channel, "otg"); err != nil {
 		result.Error = fmt.Sprintf("切换OTG失败: %v", err)
 		result.Duration = time.Since(startTime)
@@ -401,19 +421,43 @@ func setMode(port string, channel int, mode string) error {
 	return nil
 }
 
-func runFlashScript() error {
-	// 跨平台处理
-	var cmd *exec.Cmd
-	if strings.Contains(flashScript, "\\") {
-		// Windows 路径
-		dir := flashScript[:strings.LastIndex(flashScript, "\\")]
-		script := flashScript[strings.LastIndex(flashScript, "\\")+1:]
-		cmd = exec.Command("cmd", "/c", "cd", "/d", dir, "&&", script)
-	} else {
-		// Unix 路径
-		cmd = exec.Command("sh", "-c", flashScript)
-	}
+// waitForFastboot 等待 fastboot 设备出现，返回设备序列号
+func waitForFastboot(maxWaitSec int) (string, error) {
+	// 获取 ROM 目录下的 fastboot 路径
+	romDir := flashScript[:strings.LastIndex(flashScript, "\\")]
+	fastbootPath := romDir + "\\adb\\fastboot.exe"
 
+	for i := 0; i < maxWaitSec; i++ {
+		cmd := exec.Command(fastbootPath, "devices")
+		output, err := cmd.Output()
+		if err == nil {
+			lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if strings.Contains(line, "fastboot") {
+					parts := strings.Fields(line)
+					if len(parts) >= 1 {
+						return parts[0], nil
+					}
+				}
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return "", fmt.Errorf("超时 %d 秒未检测到 fastboot 设备", maxWaitSec)
+}
+
+// runFlashCmd 执行 002.cmd 刷机脚本
+func runFlashCmd(serial string) error {
+	// ROM 目录结构固定：
+	// C:\ai-services\rom\xxx\adb\fastboot.exe
+	// C:\ai-services\rom\xxx\002.cmd
+	romDir := flashScript[:strings.LastIndex(flashScript, "\\")]
+	flashCmd := romDir + "\\002.cmd"
+
+	// 同步执行 002.cmd <serial>
+	cmdStr := fmt.Sprintf("cd /d \"%s\" && \"%s\" %s", romDir, flashCmd, serial)
+	cmd := exec.Command("cmd", "/c", cmdStr)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -436,8 +480,8 @@ func printBanner() {
 	fmt.Fprintln(os.Stderr, "║           JPY 批量刷机工具 v1.0                ║")
 	fmt.Fprintln(os.Stderr, "╚════════════════════════════════════════════════╝")
 	fmt.Fprintf(os.Stderr, "中间件: %s (用户: %s)\n", middleware, user)
-	fmt.Fprintf(os.Stderr, "刷机脚本: %s\n", flashScript)
-	fmt.Fprintf(os.Stderr, "COM口: %s | 通道: %s | IP起始: %s.%d\n", comPort, channels, ipPrefix, ipOffset)
+	fmt.Fprintf(os.Stderr, "ROM目录: %s\n", flashScript[:strings.LastIndex(flashScript, "\\")])
+	fmt.Fprintf(os.Stderr, "COM口: %s | 通道: %s | IP起始: %s\n", comPort, channels, ipStart)
 	if remoteAddr != "" {
 		fmt.Fprintf(os.Stderr, "远程模式: %s\n", remoteAddr)
 	}

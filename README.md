@@ -90,26 +90,27 @@ jpy shell --remote 192.168.1.100:9090 --kill <task_id>
 
 ```bash
 # 刷 COM3 通道1（IP: 172.25.0.11）
-jpy flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 10 --script D:\flash\flash.cmd -y
+jpy flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd -y
 
 # 刷 COM3 的 1-10 通道（IP: 172.25.0.11-20）
-jpy flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 10 --script D:\flash\flash.cmd
+jpy flash run --com COM3 --ch 1-10 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd
 
 # 远程刷机（COM口在远程机器上）
-jpy flash run --remote 192.168.1.100:9090 --com COM3 --ch 1 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 10 --script D:\flash\flash.cmd
+jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd
 
 # 模拟运行（查看 IP 映射）
-jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-prefix 172.25.0 --ip-offset 10 --script D:\flash\flash.cmd --dry
+jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-start 172.25.0.11 --script D:\rom\002.cmd --dry
 ```
 
-**IP 计算规则：** `{ip-prefix}.{ip-offset + 通道号}`
+**IP 计算规则：** `--ip-start` 指定通道1的起始IP，后续通道自动递增
 
 **工作流程：**
 1. 检查设备状态
 2. 发送 reboot bootloader
 3. 切换 COM 通道为 HUB 模式
-4. 执行刷机脚本
-5. 切换回 OTG 模式
+4. 等待 fastboot 设备出现
+5. 执行 002.cmd 刷机脚本
+6. 切换回 OTG 模式
 
 ### 5. File - 远程文件传输
 
