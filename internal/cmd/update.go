@@ -16,6 +16,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	chunkSize = 1 << 20 // 1MB 分片大小
+)
+
 func newUpdateCmd() *cobra.Command {
 	var remote string
 
@@ -26,7 +30,7 @@ func newUpdateCmd() *cobra.Command {
 
 支持两种方式：
 1. 本地文件：jpy update ./jpy-new.exe --remote 192.168.1.100:9090
-   将本地文件上传到远程并更新
+   将本地文件上传到远程并更新（使用分片上传，支持大文件）
 2. 远程URL：jpy update https://example.com/jpy.exe --remote 192.168.1.100:9090
    让远程从 URL 下载并更新
 
@@ -74,73 +78,145 @@ func updateRemote(remote, source string) error {
 	return updateRemoteFromFile(remote, source)
 }
 
-// 从本地文件更新远程
+// 从本地文件更新远程（使用分片上传）
 func updateRemoteFromFile(remote, localPath string) error {
 	// 检查本地文件是否存在
-	if _, err := os.Stat(localPath); os.IsNotExist(err) {
+	stat, err := os.Stat(localPath)
+	if os.IsNotExist(err) {
 		return fmt.Errorf("本地文件不存在: %s", localPath)
 	}
+	if err != nil {
+		return fmt.Errorf("获取文件信息失败: %v", err)
+	}
 
-	fmt.Printf("正在上传文件到远程服务器...\n")
+	fileSize := stat.Size()
+	totalChunks := int((fileSize + chunkSize - 1) / chunkSize)
+
+	fmt.Printf("正在上传文件到远程服务器（分片上传）...\n")
 	fmt.Printf("  本地文件: %s\n", localPath)
+	fmt.Printf("  文件大小: %.2f MB\n", float64(fileSize)/(1024*1024))
+	fmt.Printf("  分片数量: %d\n", totalChunks)
 	fmt.Printf("  远程地址: %s\n", remote)
 
-	// 1. 上传文件到远程临时目录
-	tempPath, err := uploadFileToRemote(remote, localPath)
+	// 1. 初始化分片上传
+	tempName := fmt.Sprintf("jpy-update-%d%s", time.Now().Unix(), getExeSuffix())
+	sessionID, err := initChunkUpload(remote, filepath.Base(localPath), tempName, fileSize, totalChunks)
 	if err != nil {
-		return fmt.Errorf("上传文件失败: %v", err)
+		return fmt.Errorf("初始化上传失败: %v", err)
 	}
-	fmt.Printf("  上传完成: %s\n", tempPath)
+	fmt.Printf("  会话 ID: %s\n", sessionID)
 
-	// 2. 执行更新
-	return executeRemoteUpdate(remote, tempPath)
-}
-
-// 从 URL 更新远程
-func updateRemoteFromURL(remote, url string) error {
-	fmt.Printf("正在让远程服务器下载文件...\n")
-	fmt.Printf("  下载地址: %s\n", url)
-	fmt.Printf("  远程地址: %s\n", remote)
-
-	// 1. 让远程下载文件
-	tempPath, err := downloadFileOnRemote(remote, url)
-	if err != nil {
-		return fmt.Errorf("远程下载失败: %v", err)
-	}
-	fmt.Printf("  下载完成: %s\n", tempPath)
-
-	// 2. 执行更新
-	return executeRemoteUpdate(remote, tempPath)
-}
-
-// 上传文件到远程
-func uploadFileToRemote(remote, localPath string) (string, error) {
+	// 2. 上传分片
 	file, err := os.Open(localPath)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("打开文件失败: %v", err)
 	}
 	defer file.Close()
 
-	// 构建 multipart 请求
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
+	buf := make([]byte, chunkSize)
+	for i := 0; i < totalChunks; i++ {
+		n, err := file.Read(buf)
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("读取文件失败: %v", err)
+		}
 
-	// 添加文件
-	part, err := writer.CreateFormFile("file", filepath.Base(localPath))
+		if err := uploadChunk(remote, sessionID, i, buf[:n]); err != nil {
+			return fmt.Errorf("上传分片 %d 失败: %v", i, err)
+		}
+
+		fmt.Printf("\r  进度: %d/%d (%.1f%%)", i+1, totalChunks, float64(i+1)/float64(totalChunks)*100)
+	}
+	fmt.Println()
+
+	// 3. 完成上传
+	tempPath, err := completeChunkUpload(remote, sessionID)
+	if err != nil {
+		return fmt.Errorf("完成上传失败: %v", err)
+	}
+	fmt.Printf("  上传完成: %s\n", tempPath)
+
+	// 4. 执行更新
+	return executeRemoteUpdate(remote, tempPath)
+}
+
+// 初始化分片上传
+func initChunkUpload(remote, filename, dest string, totalSize int64, totalChunks int) (string, error) {
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"filename":    filename,
+		"dest":        dest,
+		"total_size":  totalSize,
+		"chunk_size":  chunkSize,
+		"total_chunk": totalChunks,
+	})
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Post(remote+"/file/chunk/init", "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
-	if _, err := io.Copy(part, file); err != nil {
+	defer resp.Body.Close()
+
+	var result struct {
+		Success   bool   `json:"success"`
+		SessionID string `json:"session_id"`
+		Error     string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", err
 	}
 
-	// 添加目标路径（临时目录）
-	tempName := fmt.Sprintf("jpy-update-%d%s", time.Now().Unix(), getExeSuffix())
-	writer.WriteField("dest", tempName)
+	if !result.Success {
+		return "", fmt.Errorf("%s", result.Error)
+	}
+
+	return result.SessionID, nil
+}
+
+// 上传单个分片
+func uploadChunk(remote, sessionID string, chunkIndex int, data []byte) error {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	writer.WriteField("session_id", sessionID)
+	writer.WriteField("chunk_index", fmt.Sprintf("%d", chunkIndex))
+
+	part, err := writer.CreateFormFile("chunk", "chunk")
+	if err != nil {
+		return err
+	}
+	part.Write(data)
 	writer.Close()
 
-	// 发送请求
-	resp, err := http.Post(remote+"/file/upload", writer.FormDataContentType(), &buf)
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Post(remote+"/file/chunk/upload", writer.FormDataContentType(), &buf)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+
+	if !result.Success {
+		return fmt.Errorf("%s", result.Error)
+	}
+
+	return nil
+}
+
+// 完成分片上传
+func completeChunkUpload(remote, sessionID string) (string, error) {
+	reqBody, _ := json.Marshal(map[string]string{
+		"session_id": sessionID,
+	})
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Post(remote+"/file/chunk/complete", "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
@@ -162,6 +238,23 @@ func uploadFileToRemote(remote, localPath string) (string, error) {
 	return result.Path, nil
 }
 
+// 从 URL 更新远程
+func updateRemoteFromURL(remote, url string) error {
+	fmt.Printf("正在让远程服务器下载文件...\n")
+	fmt.Printf("  下载地址: %s\n", url)
+	fmt.Printf("  远程地址: %s\n", remote)
+
+	// 1. 让远程下载文件
+	tempPath, err := downloadFileOnRemote(remote, url)
+	if err != nil {
+		return fmt.Errorf("远程下载失败: %v", err)
+	}
+	fmt.Printf("  下载完成: %s\n", tempPath)
+
+	// 2. 执行更新
+	return executeRemoteUpdate(remote, tempPath)
+}
+
 // 让远程下载文件
 func downloadFileOnRemote(remote, url string) (string, error) {
 	tempName := fmt.Sprintf("jpy-update-%d%s", time.Now().Unix(), getExeSuffix())
@@ -171,7 +264,8 @@ func downloadFileOnRemote(remote, url string) (string, error) {
 		"dest": tempName,
 	})
 
-	resp, err := http.Post(remote+"/file/download", "application/json", bytes.NewReader(reqBody))
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Post(remote+"/file/download", "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
@@ -198,7 +292,8 @@ func executeRemoteUpdate(remote, newFilePath string) error {
 	fmt.Println("正在执行更新...")
 
 	// 获取远程系统信息
-	resp, err := http.Get(remote + "/version")
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(remote + "/version")
 	if err != nil {
 		return fmt.Errorf("获取远程版本信息失败: %v", err)
 	}
@@ -261,7 +356,7 @@ func executeRemoteUpdate(remote, newFilePath string) error {
 		"timeout": 60,
 	})
 
-	resp2, err := http.Post(remote+"/shell/async", "application/json", bytes.NewReader(reqBody))
+	resp2, err := client.Post(remote+"/shell/async", "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return fmt.Errorf("执行更新命令失败: %v", err)
 	}
@@ -293,7 +388,8 @@ func getRemoteExePath(remote, cmd string) (string, error) {
 		"timeout": 5,
 	})
 
-	resp, err := http.Post(remote+"/shell", "application/json", bytes.NewReader(reqBody))
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Post(remote+"/shell", "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}

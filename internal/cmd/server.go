@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -170,6 +171,9 @@ func newServerCmd() *cobra.Command {
 			mux.HandleFunc("/shell/kill", makeShellKillHandler(tm))
 			mux.HandleFunc("/file/upload", handleFileUpload)
 			mux.HandleFunc("/file/download", handleFileDownload)
+			mux.HandleFunc("/file/chunk/init", handleChunkInit)
+			mux.HandleFunc("/file/chunk/upload", handleChunkUpload)
+			mux.HandleFunc("/file/chunk/complete", handleChunkComplete)
 			mux.HandleFunc("/version", handleVersion)
 			mux.HandleFunc("/health", handleHealth)
 
@@ -250,7 +254,7 @@ func makeExecAsyncHandler(selfPath string, tm *taskManager) http.HandlerFunc {
 
 		var req struct {
 			Args    []string `json:"args"`
-			Timeout int      `json:"timeout"` // 秒，0=默认600
+			Timeout int      `json:"timeout"` // 秒，0=无限，-1或不传=默认600
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -262,15 +266,23 @@ func makeExecAsyncHandler(selfPath string, tm *taskManager) http.HandlerFunc {
 			return
 		}
 
-		timeout := 600 * time.Second // 默认 10 分钟
-		if req.Timeout > 0 {
-			timeout = time.Duration(req.Timeout) * time.Second
-		}
-
 		// 构建命令字符串用于显示
 		cmdStr := selfPath + " " + strings.Join(req.Args, " ")
 		task := tm.create(cmdStr)
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+
+		var ctx context.Context
+		var cancel context.CancelFunc
+
+		if req.Timeout == 0 {
+			// timeout=0 表示无限时长
+			ctx, cancel = context.WithCancel(context.Background())
+		} else {
+			timeout := 600 * time.Second // 默认 10 分钟
+			if req.Timeout > 0 {
+				timeout = time.Duration(req.Timeout) * time.Second
+			}
+			ctx, cancel = context.WithTimeout(context.Background(), timeout)
+		}
 		task.cancel = cancel
 
 		go func() {
@@ -292,7 +304,7 @@ func makeExecAsyncHandler(selfPath string, tm *taskManager) http.HandlerFunc {
 				if ctx.Err() == context.DeadlineExceeded {
 					task.Status = "failed"
 					task.ExitCode = 124
-					task.stderr.WriteString(fmt.Sprintf("\n命令超时 (%v)", timeout))
+					task.stderr.WriteString("\n命令超时")
 				} else if exitErr, ok := err.(*exec.ExitError); ok {
 					task.Status = "done"
 					task.ExitCode = exitErr.ExitCode()
@@ -421,7 +433,7 @@ func makeShellAsyncHandler(selfPath string, tm *taskManager) http.HandlerFunc {
 				if ctx.Err() == context.DeadlineExceeded {
 					task.Status = "failed"
 					task.ExitCode = 124
-					task.stderr.WriteString(fmt.Sprintf("\n命令超时 (%v)", timeout))
+					task.stderr.WriteString("\n命令超时")
 				} else if exitErr, ok := err.(*exec.ExitError); ok {
 					task.Status = "done"
 					task.ExitCode = exitErr.ExitCode()
@@ -724,6 +736,307 @@ func handleFileDownload(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, fileResponse{
 		Success: true, Path: destPath, Size: size,
+	})
+}
+
+// --- 分片上传 ---
+
+// 分片上传会话管理
+var chunkSessions = struct {
+	sync.RWMutex
+	sessions map[string]*chunkSession
+}{sessions: make(map[string]*chunkSession)}
+
+type chunkSession struct {
+	ID         string
+	DestPath   string
+	TotalSize  int64
+	ChunkSize  int64
+	TotalChunk int
+	Received   map[int]bool
+	TempDir    string
+	CreatedAt  time.Time
+}
+
+// 初始化分片上传
+type chunkInitRequest struct {
+	Filename   string `json:"filename"`
+	Dest       string `json:"dest"`
+	TotalSize  int64  `json:"total_size"`
+	ChunkSize  int64  `json:"chunk_size"`
+	TotalChunk int    `json:"total_chunk"`
+}
+
+type chunkInitResponse struct {
+	Success   bool   `json:"success"`
+	SessionID string `json:"session_id,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+func handleChunkInit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req chunkInitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, chunkInitResponse{
+			Success: false, Error: fmt.Sprintf("解析请求失败: %v", err),
+		})
+		return
+	}
+
+	if req.TotalSize <= 0 || req.ChunkSize <= 0 || req.TotalChunk <= 0 {
+		writeJSON(w, http.StatusBadRequest, chunkInitResponse{
+			Success: false, Error: "参数无效",
+		})
+		return
+	}
+
+	// 生成会话 ID
+	sessionID := generateID()
+
+	// 创建临时目录
+	tempDir := filepath.Join(os.TempDir(), "jpy-chunk-"+sessionID)
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, chunkInitResponse{
+			Success: false, Error: fmt.Sprintf("创建临时目录失败: %v", err),
+		})
+		return
+	}
+
+	// 解析目标路径
+	destPath := req.Dest
+	if destPath == "" {
+		destPath = req.Filename
+	}
+	if !filepath.IsAbs(destPath) {
+		destPath = filepath.Join(os.TempDir(), destPath)
+	}
+
+	// 创建会话
+	session := &chunkSession{
+		ID:         sessionID,
+		DestPath:   destPath,
+		TotalSize:  req.TotalSize,
+		ChunkSize:  req.ChunkSize,
+		TotalChunk: req.TotalChunk,
+		Received:   make(map[int]bool),
+		TempDir:    tempDir,
+		CreatedAt:  time.Now(),
+	}
+
+	chunkSessions.Lock()
+	chunkSessions.sessions[sessionID] = session
+	chunkSessions.Unlock()
+
+	writeJSON(w, http.StatusOK, chunkInitResponse{
+		Success:   true,
+		SessionID: sessionID,
+	})
+}
+
+// 上传分片
+type chunkUploadResponse struct {
+	Success  bool   `json:"success"`
+	Received int    `json:"received,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+func handleChunkUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 限制单个分片大小（2MB）
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+
+	if err := r.ParseMultipartForm(2 << 20); err != nil {
+		writeJSON(w, http.StatusBadRequest, chunkUploadResponse{
+			Success: false, Error: fmt.Sprintf("解析请求失败: %v", err),
+		})
+		return
+	}
+
+	sessionID := r.FormValue("session_id")
+	chunkIndexStr := r.FormValue("chunk_index")
+
+	if sessionID == "" || chunkIndexStr == "" {
+		writeJSON(w, http.StatusBadRequest, chunkUploadResponse{
+			Success: false, Error: "缺少 session_id 或 chunk_index",
+		})
+		return
+	}
+
+	chunkIndex, err := strconv.Atoi(chunkIndexStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, chunkUploadResponse{
+			Success: false, Error: "chunk_index 无效",
+		})
+		return
+	}
+
+	// 获取会话
+	chunkSessions.RLock()
+	session, ok := chunkSessions.sessions[sessionID]
+	chunkSessions.RUnlock()
+
+	if !ok {
+		writeJSON(w, http.StatusNotFound, chunkUploadResponse{
+			Success: false, Error: "会话不存在或已过期",
+		})
+		return
+	}
+
+	// 获取文件
+	file, _, err := r.FormFile("chunk")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, chunkUploadResponse{
+			Success: false, Error: fmt.Sprintf("获取分片数据失败: %v", err),
+		})
+		return
+	}
+	defer file.Close()
+
+	// 保存分片
+	chunkPath := filepath.Join(session.TempDir, fmt.Sprintf("chunk_%d", chunkIndex))
+	out, err := os.Create(chunkPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, chunkUploadResponse{
+			Success: false, Error: fmt.Sprintf("创建分片文件失败: %v", err),
+		})
+		return
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, file); err != nil {
+		writeJSON(w, http.StatusInternalServerError, chunkUploadResponse{
+			Success: false, Error: fmt.Sprintf("写入分片失败: %v", err),
+		})
+		return
+	}
+
+	// 标记已接收
+	chunkSessions.Lock()
+	session.Received[chunkIndex] = true
+	received := len(session.Received)
+	chunkSessions.Unlock()
+
+	writeJSON(w, http.StatusOK, chunkUploadResponse{
+		Success:  true,
+		Received: received,
+	})
+}
+
+// 完成分片上传
+type chunkCompleteRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type chunkCompleteResponse struct {
+	Success bool   `json:"success"`
+	Path    string `json:"path,omitempty"`
+	Size    int64  `json:"size,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+func handleChunkComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req chunkCompleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, chunkCompleteResponse{
+			Success: false, Error: fmt.Sprintf("解析请求失败: %v", err),
+		})
+		return
+	}
+
+	// 获取会话
+	chunkSessions.Lock()
+	session, ok := chunkSessions.sessions[req.SessionID]
+	if ok {
+		delete(chunkSessions.sessions, req.SessionID)
+	}
+	chunkSessions.Unlock()
+
+	if !ok {
+		writeJSON(w, http.StatusNotFound, chunkCompleteResponse{
+			Success: false, Error: "会话不存在或已过期",
+		})
+		return
+	}
+
+	// 检查是否所有分片都已接收
+	if len(session.Received) != session.TotalChunk {
+		// 清理临时目录
+		os.RemoveAll(session.TempDir)
+		writeJSON(w, http.StatusBadRequest, chunkCompleteResponse{
+			Success: false, Error: fmt.Sprintf("分片不完整: 期望 %d, 收到 %d", session.TotalChunk, len(session.Received)),
+		})
+		return
+	}
+
+	// 确保目标目录存在
+	dir := filepath.Dir(session.DestPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		os.RemoveAll(session.TempDir)
+		writeJSON(w, http.StatusInternalServerError, chunkCompleteResponse{
+			Success: false, Error: fmt.Sprintf("创建目录失败: %v", err),
+		})
+		return
+	}
+
+	// 合并分片
+	out, err := os.Create(session.DestPath)
+	if err != nil {
+		os.RemoveAll(session.TempDir)
+		writeJSON(w, http.StatusInternalServerError, chunkCompleteResponse{
+			Success: false, Error: fmt.Sprintf("创建目标文件失败: %v", err),
+		})
+		return
+	}
+	defer out.Close()
+
+	var totalSize int64
+	for i := 0; i < session.TotalChunk; i++ {
+		chunkPath := filepath.Join(session.TempDir, fmt.Sprintf("chunk_%d", i))
+		chunk, err := os.Open(chunkPath)
+		if err != nil {
+			out.Close()
+			os.Remove(session.DestPath)
+			os.RemoveAll(session.TempDir)
+			writeJSON(w, http.StatusInternalServerError, chunkCompleteResponse{
+				Success: false, Error: fmt.Sprintf("读取分片 %d 失败: %v", i, err),
+			})
+			return
+		}
+
+		n, err := io.Copy(out, chunk)
+		chunk.Close()
+		if err != nil {
+			out.Close()
+			os.Remove(session.DestPath)
+			os.RemoveAll(session.TempDir)
+			writeJSON(w, http.StatusInternalServerError, chunkCompleteResponse{
+				Success: false, Error: fmt.Sprintf("合并分片 %d 失败: %v", i, err),
+			})
+			return
+		}
+		totalSize += n
+	}
+
+	// 清理临时目录
+	os.RemoveAll(session.TempDir)
+
+	writeJSON(w, http.StatusOK, chunkCompleteResponse{
+		Success: true,
+		Path:    session.DestPath,
+		Size:    totalSize,
 	})
 }
 
