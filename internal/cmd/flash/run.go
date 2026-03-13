@@ -423,8 +423,9 @@ func setMode(port string, channel int, mode string) error {
 
 // getRomDir 从 flashScript 路径提取 ROM 目录，支持正斜杠和反斜杠
 func getRomDir() string {
-	// 统一转换为反斜杠（Windows 风格）
+	// 统一转换为单个反斜杠（Windows 风格）
 	path := strings.ReplaceAll(flashScript, "/", "\\")
+	path = strings.ReplaceAll(path, "\\\\", "\\") // 处理双反斜杠
 	lastSlash := strings.LastIndex(path, "\\")
 	if lastSlash == -1 {
 		return "."
