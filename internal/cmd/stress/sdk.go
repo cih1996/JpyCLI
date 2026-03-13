@@ -325,8 +325,11 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 		status   int
 		progress string
 	})
-	// 记录最后一次获取到的进度信息（用于超时时显示）
-	lastProgress := make(map[int64]string)
+	// 记录最后一次获取到的原始状态（用于超时时显示，包含 status 和 progress）
+	lastRawStatus := make(map[int64]struct {
+		status   int
+		progress string
+	})
 	// 记录已完成改机、等待上线的设备 (deviceID -> true)
 	waitingOnline := make(map[int64]bool)
 	pollCount := 0
@@ -442,10 +445,11 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 				status := int(s.Status)
 				progress := s.Progress
 
-				// 记录最新进度（无论是否完成）
-				if progress != "" {
-					lastProgress[taskID] = progress
-				}
+				// 记录最新原始状态（无论是否完成）
+				lastRawStatus[taskID] = struct {
+					status   int
+					progress string
+				}{status, progress}
 
 				// 状态判断：
 				// status=200 + progress="改机完成" = 真正完成，进入等待上线
@@ -480,15 +484,12 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 					continue
 				}
 				info := deviceInfoMap[deviceID]
-				progressStr := lastProgress[taskID]
-				if progressStr == "" {
-					progressStr = "无进度信息"
-				}
+				raw := lastRawStatus[taskID]
 				statusNote := ""
 				if waitingOnline[deviceID] {
 					statusNote = " [等待上线]"
 				}
-				logger.Info("  设备 %d | %s | %s%s", deviceID, info.UUID, progressStr, statusNote)
+				logger.Info("  设备 %d | %s | status=%d | progress=%s%s", deviceID, info.UUID, raw.status, raw.progress, statusNote)
 			}
 			logger.Info("==========================================")
 		}
@@ -523,21 +524,19 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 				success++
 			} else {
 				result.Success = false
-				result.Error = r.progress
+				result.Error = fmt.Sprintf("status=%d, progress=%s", r.status, r.progress)
 				failed++
 				failedDevices = append(failedDevices, result)
 			}
 		} else {
-			// 超时未完成，尝试获取最后的进度信息
-			lastMsg := lastProgress[taskID]
-			if lastMsg == "" {
-				lastMsg = "无进度信息"
-			}
-			if waitingOnline[deviceID] {
-				lastMsg = "改机完成但设备未上线"
-			}
+			// 超时未完成，显示最后的原始状态
+			raw := lastRawStatus[taskID]
 			result.Success = false
-			result.Error = fmt.Sprintf("超时未完成 (%s)", lastMsg)
+			if waitingOnline[deviceID] {
+				result.Error = fmt.Sprintf("超时(等待上线) | 最后状态: status=%d, progress=%s", raw.status, raw.progress)
+			} else {
+				result.Error = fmt.Sprintf("超时 | 最后状态: status=%d, progress=%s", raw.status, raw.progress)
+			}
 			failed++
 			failedDevices = append(failedDevices, result)
 		}
