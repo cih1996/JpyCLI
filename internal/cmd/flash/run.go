@@ -459,17 +459,16 @@ func waitForFastboot(maxWaitSec int) (string, error) {
 	return "", fmt.Errorf("超时 %d 秒未检测到 fastboot 设备", maxWaitSec)
 }
 
-// runFlashCmd 执行 002.cmd 刷机脚本
+// runFlashCmd 执行刷机脚本
 func runFlashCmd(serial string) error {
-	// ROM 目录结构固定：
-	// C:\ai-services\rom\xxx\adb\fastboot.exe
-	// C:\ai-services\rom\xxx\002.cmd
 	romDir := getRomDir()
-	flashCmd := romDir + "\\002.cmd"
+	// 直接使用用户传入的 --script 路径，统一转换为 Windows 格式
+	flashCmd := strings.ReplaceAll(flashScript, "/", "\\")
+	flashCmd = strings.ReplaceAll(flashCmd, "\\\\", "\\")
 
-	// 同步执行 002.cmd <serial>
-	cmdStr := fmt.Sprintf("cd /d \"%s\" && \"%s\" %s", romDir, flashCmd, serial)
-	cmd := exec.Command("cmd", "/c", cmdStr)
+	// 使用 cmd.Dir 设置工作目录
+	cmd := exec.Command("cmd", "/c", flashCmd, serial)
+	cmd.Dir = romDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 

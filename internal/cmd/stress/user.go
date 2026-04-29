@@ -122,6 +122,7 @@ func newUserCmd() *cobra.Command {
 		deviceIDs  []int64
 		output     string
 		logDir     string
+		debug      bool
 	)
 
 	cmd := &cobra.Command{
@@ -137,9 +138,12 @@ func newUserCmd() *cobra.Command {
   jpy stress user -s wss://home.accjs.cn/ws -k YOUR_SECRET_KEY -c config.json --device 123,456 --loop 3 --interval 5m
 
   # 无限循环测试
-  jpy stress user -s wss://home.accjs.cn/ws -k YOUR_SECRET_KEY -c config.json --loop 0 --interval 3m`,
+  jpy stress user -s wss://home.accjs.cn/ws -k YOUR_SECRET_KEY -c config.json --loop 0 --interval 3m
+
+  # 调试模式：遇到失败立即停止（配合 --loop 0 保留现场）
+  jpy stress user -s wss://home.accjs.cn/ws -k YOUR_SECRET_KEY -c config.json --loop 0 --debug`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStressUser(serverURL, secretKey, configFile, loop, interval, timeout, deviceIDs, output, logDir)
+			return runStressUser(serverURL, secretKey, configFile, loop, interval, timeout, deviceIDs, output, logDir, debug)
 		},
 	}
 
@@ -152,6 +156,7 @@ func newUserCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&timeout, "timeout", 10*time.Minute, "单轮超时时间")
 	cmd.Flags().StringVarP(&output, "output", "o", "plain", "输出模式: plain/json")
 	cmd.Flags().StringVar(&logDir, "log-dir", "", "日志目录（默认 ~/.jpy/logs/stress）")
+	cmd.Flags().BoolVar(&debug, "debug", false, "调试模式：遇到失败立即停止（配合 --loop 0 保留现场）")
 
 	cmd.MarkFlagRequired("key")
 	cmd.MarkFlagRequired("config")
@@ -159,7 +164,7 @@ func newUserCmd() *cobra.Command {
 	return cmd
 }
 
-func runStressUser(serverURL, secretKey, configFile string, loop int, interval, timeout time.Duration, deviceIDs []int64, output, logDir string) error {
+func runStressUser(serverURL, secretKey, configFile string, loop int, interval, timeout time.Duration, deviceIDs []int64, output, logDir string, debug bool) error {
 	// 1. 初始化日志
 	if logDir == "" {
 		home, _ := os.UserHomeDir()
@@ -181,6 +186,9 @@ func runStressUser(serverURL, secretKey, configFile string, loop int, interval, 
 	logger.Info("循环次数: %d (0=无限)", loop)
 	logger.Info("循环间隔: %v", interval)
 	logger.Info("单轮超时: %v", timeout)
+	if debug {
+		logger.Info("调试模式: 开启（遇到失败立即停止）")
+	}
 	logger.Info("日志文件: %s", logFile)
 	logger.Info("========================================")
 
@@ -259,10 +267,18 @@ func runStressUser(serverURL, secretKey, configFile string, loop int, interval, 
 			logger.Warn("无在线设备，跳过本轮")
 		} else {
 			// 执行改机
-			success, failed, deviceResults := performChangeOs(onlineIDs, &params, logger, timeout, deviceInfoMap, round)
+			success, failed, deviceResults := performChangeOs(onlineIDs, &params, logger, timeout, deviceInfoMap, round, debug)
 			roundResult.Success = success
 			roundResult.Failed = failed
 			roundResult.Devices = deviceResults
+
+			// 调试模式：遇到失败立即停止
+			if debug && failed > 0 {
+				logger.Error("调试模式：检测到 %d 台设备失败，立即停止以保留现场", failed)
+				roundResult.Duration = time.Since(roundStart).Round(time.Second).String()
+				allResults = append(allResults, roundResult)
+				break
+			}
 		}
 
 		roundResult.Duration = time.Since(roundStart).Round(time.Second).String()

@@ -238,7 +238,7 @@ func checkDevicesOnline(deviceIDs []int64, logger *StressLogger) map[int64]bool 
 }
 
 // performChangeOs 执行改机操作
-func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLogger, timeout time.Duration, deviceInfoMap map[int64]struct{ UUID, IP string }, round int) (success, failed int, results []DeviceResult) {
+func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLogger, timeout time.Duration, deviceInfoMap map[int64]struct{ UUID, IP string }, round int, debug bool) (success, failed int, results []DeviceResult) {
 	logger.Info("[第 %d 轮] 开始为 %d 台设备发送改机请求...", round, len(deviceIDs))
 
 	// 准备请求
@@ -390,8 +390,7 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 						status   int
 						progress string
 					}{1, "改机完成并已上线"}
-					info := deviceInfoMap[deviceID]
-					logger.Info("  ✓ 设备 %d (%s) 已上线", deviceID, info.UUID)
+					// 不再单独输出成功日志
 				}
 			}
 		}
@@ -441,7 +440,6 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 			for _, s := range res {
 				taskID := int64(s.Id)
 				deviceID := taskMap[taskID]
-				info := deviceInfoMap[deviceID]
 				status := int(s.Status)
 				progress := s.Progress
 
@@ -457,10 +455,9 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 				// status<0 = 失败
 				// status=2,3等 = 进行中
 				if status == 200 && strings.Contains(progress, "改机完成") {
-					// 真正改机完成，进入等待上线状态
+					// 真正改机完成，进入等待上线状态（静默处理）
 					if !waitingOnline[deviceID] {
 						waitingOnline[deviceID] = true
-						logger.Info("  设备 %d (%s) 改机完成，等待上线...", deviceID, info.UUID)
 					}
 				} else if status < 0 {
 					completedTasks[taskID] = true
@@ -468,37 +465,59 @@ func performChangeOs(deviceIDs []int64, params *ChangeOsParams, logger *StressLo
 						status   int
 						progress string
 					}{status, progress}
-					logger.Error("  ✗ 设备 %d (%s) 失败: %s", deviceID, info.UUID, progress)
+					// 失败日志在汇总中统一输出
 				}
 			}
 		}
 
-		// 统计当前待处理数量
+		// 统计当前各状态数量
+		successCount := 0
+		failedCount := 0
+		for _, r := range taskResults {
+			if r.status == 1 {
+				successCount++
+			} else if r.status < 0 {
+				failedCount++
+			}
+		}
 		pendingCount := len(taskIDs) - len(completedTasks)
 
-		// 每 10 次轮询输出所有待处理设备的详细状态
-		if pollCount%10 == 0 && pendingCount > 0 {
-			logger.Info("========== 待处理设备详情 (%d 台) ==========", pendingCount)
-			for taskID, deviceID := range taskMap {
-				if completedTasks[taskID] {
-					continue
+		// 每 10 次轮询输出详细状态汇总
+		if pollCount%10 == 0 {
+			logger.Info("========== 设备状态汇总 ==========")
+			logger.Info("  成功: %d 台 | 失败: %d 台 | 待处理: %d 台", successCount, failedCount, pendingCount)
+			if pendingCount > 0 {
+				logger.Info("---------- 待处理设备 ----------")
+				for taskID, deviceID := range taskMap {
+					if completedTasks[taskID] {
+						continue
+					}
+					info := deviceInfoMap[deviceID]
+					raw := lastRawStatus[taskID]
+					statusNote := ""
+					if waitingOnline[deviceID] {
+						statusNote = " [等待上线]"
+					}
+					logger.Info("  设备 %d | %s | status=%d | progress=%s%s", deviceID, info.UUID, raw.status, raw.progress, statusNote)
 				}
-				info := deviceInfoMap[deviceID]
-				raw := lastRawStatus[taskID]
-				statusNote := ""
-				if waitingOnline[deviceID] {
-					statusNote = " [等待上线]"
-				}
-				logger.Info("  设备 %d | %s | status=%d | progress=%s%s", deviceID, info.UUID, raw.status, raw.progress, statusNote)
 			}
-			logger.Info("==========================================")
+			if failedCount > 0 {
+				logger.Info("---------- 失败设备 ----------")
+				for taskID, deviceID := range taskMap {
+					r, ok := taskResults[taskID]
+					if !ok || r.status >= 0 {
+						continue
+					}
+					info := deviceInfoMap[deviceID]
+					logger.Info("  设备 %d | %s | status=%d | progress=%s", deviceID, info.UUID, r.status, r.progress)
+				}
+			}
+			logger.Info("==================================")
 		}
 
-		// 每 3 次轮询显示总进度
-		if pollCount%3 == 0 {
-			completed := len(completedTasks)
-			total := len(taskIDs)
-			logger.Info("[第 %d 轮] 进度: %d/%d (%.1f%%)", round, completed, total, float64(completed)*100/float64(total))
+		// 每 3 次轮询显示简要进度
+		if pollCount%3 == 0 && pollCount%10 != 0 {
+			logger.Info("[第 %d 轮] 成功=%d 失败=%d 待处理=%d", round, successCount, failedCount, pendingCount)
 		}
 
 		if len(completedTasks) == len(taskIDs) {

@@ -1,0 +1,15 @@
+{
+  "bs": "wifi",
+  "category": "491",
+  "version": "491",
+  "country": "us",
+  "language": "en-US",
+  "timezone": "America/New_York",
+  "operatorName": "Cingular",
+  "mcc": "310",
+  "mnc": "150",
+  "operator": "Cingular",
+  "msisdn": "",
+  "smsc": "",
+  "simulate":true
+}
