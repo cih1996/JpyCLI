@@ -33,6 +33,7 @@ func NewDeviceCmd() *cobra.Command {
 	cmd.AddCommand(NewUSBCmd())
 	cmd.AddCommand(NewADBCmd())
 	cmd.AddCommand(NewStatusCmd())
+	cmd.AddCommand(NewMiddlewareCmd())
 
 	return cmd
 }

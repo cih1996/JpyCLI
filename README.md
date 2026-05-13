@@ -16,6 +16,13 @@ JPY 中间件管理命令行工具，面向 AI/脚本设计，零配置，无状
 
 解压后将 `jpy` 放入 PATH 即可使用。
 
+## 文档索引
+
+- [`CLI_ZH_README.md`](./CLI_ZH_README.md)：中文完整使用手册
+- [`CLI_README.md`](./CLI_README.md)：英文完整使用手册
+- [`HTTP_REMOTE_CONTROL.md`](./HTTP_REMOTE_CONTROL.md)：纯 HTTP 远程控制文档
+- [`HANDOFF.md`](./HANDOFF.md)：项目交接文档
+
 ## 功能板块
 
 ### 1. Device - 中间件设备管理
@@ -42,7 +49,43 @@ jpy device adb -s 192.168.1.1 -u admin -p 123456 --set on --seat 3
 jpy device status -s 192.168.1.1 -u admin -p 123456 -o json
 ```
 
-### 2. COM - 串口硬件控制
+### 2. Middleware - 中间件固件升级
+
+上传本地固件到中间件，并立即调用升级接口执行更新。
+
+```bash
+# 上传固件并执行升级
+jpy device middleware upgrade --file ./firmware.bin -s 192.168.1.1 -u admin -p 123456
+
+# JSON 输出，方便 UI 或脚本接入
+jpy device middleware upgrade --file ./firmware.bin -s 192.168.1.1 -u admin -p 123456 -o json
+
+# 非强制升级
+jpy device middleware upgrade --file ./firmware.bin -s 192.168.1.1 -u admin -p 123456 --required=false
+```
+
+### 3. Middleware ROM - 中间件接口刷机基础命令
+
+通过中间件 HTTP + Guard WebSocket 接口管理 ROM 包并发起刷机。
+
+```bash
+# 上传 ROM 包
+jpy device middleware rom upload --file ./rom.zip -s 192.168.1.1 -u admin -p 123456
+
+# 查看 ROM 包列表
+jpy device middleware rom list -s 192.168.1.1 -u admin -p 123456
+
+# 发起刷机（image 使用 rom list 返回的 name）
+jpy device middleware rom flash --seat 3 --sn ABC123 --image 1767856234 -s 192.168.1.1 -u admin -p 123456
+
+# 查询刷机状态
+jpy device middleware rom status -s 192.168.1.1 -u admin -p 123456 -o json
+
+# 查询刷机详情日志
+jpy device middleware rom detail --seat 3 --session session-id -s 192.168.1.1 -u admin -p 123456
+```
+
+### 4. COM - 串口硬件控制
 
 操作 USB HUB 控制板（20路通道），通过 COM 串口通信。
 
@@ -84,7 +127,7 @@ jpy shell --remote 192.168.1.100:9090 --tasks
 jpy shell --remote 192.168.1.100:9090 --kill <task_id>
 ```
 
-### 4. Flash - 批量刷机
+### 5. Flash - 批量刷机
 
 集成 device + com 操作，实现批量刷机自动化。
 
@@ -114,7 +157,7 @@ jpy flash run --com COM3 --ch 1-5 --mw 172.25.0.251 --ip-start 172.25.0.11 --scr
 5. 执行刷机脚本（传入设备序列号）
 6. 切换回 OTG 模式
 
-### 5. File - 远程文件传输
+### 6. File - 远程文件传输
 
 支持大文件传输（最大 5GB），流式传输不占内存。
 
@@ -129,7 +172,7 @@ jpy file pull "https://example.com/rom.zip" --remote 192.168.1.100:9090 --dest D
 jpy file push ./large.zip --remote 192.168.1.100:9090 --timeout 3600
 ```
 
-### 6. Update - 远程更新
+### 7. Update - 远程更新
 
 更新远程 jpy CLI 程序，支持分片上传（适合 FRPC 隧道）。
 
@@ -141,7 +184,7 @@ jpy update ./jpy-windows-amd64.exe --remote 192.168.1.100:9090
 jpy update https://example.com/jpy.exe --remote 192.168.1.100:9090
 ```
 
-### 7. Stress - 压力测试
+### 8. Stress - 压力测试
 
 用户端改机压力测试，一行命令执行，无交互式 TUI。
 
@@ -177,21 +220,31 @@ jpy stress user -k YOUR_SECRET_KEY -c config.json --timeout 15m --log-dir /var/l
 
 ## 远程模式
 
-启动 server 后，可通过 `--remote` 参数远程调用任意命令：
+结论：远程调用走 **HTTP**，不是 WS。被控端先启动 HTTP 服务：
 
 ```bash
-# 启动 server（在远程机器上）
 jpy server --port 9090
+```
 
-# 远程调用（在本地，默认 120 秒超时）
+启动后进程会一直挂起监听，默认端口 `9090`。
+
+支持情况：
+
+| 类型 | 是否支持远程 | 写法 |
+|------|--------------|------|
+| device / device middleware / com / flash / stress | 支持 | `jpy --remote <host:port> <命令>` |
+| shell | 支持 | `jpy shell --remote <host:port> ...` |
+| file / update / version | 支持 | 使用命令自己的 `--remote` 参数 |
+| server | 不支持 | 防止递归启动服务 |
+
+常用示例：
+
+```bash
 jpy --remote 192.168.1.100:9090 device list -s 192.168.1.1 -u admin -p 123456
 jpy --remote 192.168.1.100:9090 com list
-
-# 同步执行刷机（无限等待，适合批量刷机）
-jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1-20 ... -y --timeout 0
-
-# 异步执行（立即返回 task_id）
+jpy --remote 192.168.1.100:9090 device middleware upgrade --file ./firmware.bin -s 192.168.1.1 -u admin -p 123456 -o json
 jpy --remote 192.168.1.100:9090 flash run --com COM3 --ch 1-20 ... -y --async --async-timeout 0
+jpy shell --remote 192.168.1.100:9090 --task <task_id>
 ```
 
 **超时参数：**
@@ -231,7 +284,7 @@ jpy
 
 ## HTTP 接口
 
-server 模式提供完整的 HTTP API，支持纯 HTTP 调用（无需本地安装 CLI）：
+server 模式提供完整的 HTTP API，支持纯 HTTP 调用（不走 `jpy --remote`）。完整文档见：[`HTTP_REMOTE_CONTROL.md`](./HTTP_REMOTE_CONTROL.md)。
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
@@ -250,36 +303,22 @@ server 模式提供完整的 HTTP API，支持纯 HTTP 调用（无需本地安�
 | /file/chunk/upload | POST | 上传分片 |
 | /file/chunk/complete | POST | 完成分片上传 |
 
-示例：
+最常用调用方式：
 
 ```bash
-# 健康检查
-curl http://192.168.1.100:9090/health
-
-# 执行 CLI 命令（同步）
 curl -X POST http://192.168.1.100:9090/exec \
   -H "Content-Type: application/json" \
-  -d '{"args": ["device", "list", "-s", "xxx", "-u", "xxx", "-p", "xxx"]}'
-
-# 执行 CLI 命令（异步，无限超时）
-curl -X POST http://192.168.1.100:9090/exec/async \
-  -H "Content-Type: application/json" \
-  -d '{"args": ["flash", "run", "--com", "COM3", "--ch", "1-20", "--mw", "172.25.0.251", "--ip-start", "172.25.0.11", "--script", "C:/ai-services/rom/8se-20260309/002.cmd", "-y"], "timeout": 0}'
-
-# 查询任务状态（status: running/done/failed）
-curl http://192.168.1.100:9090/shell/task?id=abc123
-
-# 终止任务
-curl http://192.168.1.100:9090/shell/kill?id=abc123
+  -d '{"args":["device","list","-s","172.25.0.251","-u","admin","-p","123456","-o","json"]}'
 ```
 
-**异步任务状态判断：**
-- `status: "running"` → 进行中
-- `status: "done"` + `exit_code: 0` → 成功
-- `status: "done"` + `exit_code: 非0` → 失败
-- `status: "failed"` + `exit_code: 124` → 超时
+说明：
 
-**timeout 参数：** `0`=无限，不传=默认600秒
+- `/exec` 的 `args` 是去掉 `jpy` 后的参数数组。
+- 禁止在 `args` 内传 `server` 和 `--remote`。
+- 文件类命令的路径都是被控端路径；主控端文件需先用 `/file/upload` 上传。
+- 长任务用 `/exec/async`，再通过 `/shell/task` 查询。
+
+**timeout 参数：** `/exec/async` 的 `timeout=0` 表示无限，不传或小于 0 表示默认 600 秒
 
 ## 输出格式
 
